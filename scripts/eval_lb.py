@@ -1,9 +1,9 @@
-#!/usr/bin/env python3
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
 import os
 import subprocess
+import sys
 import csv
 from collections import defaultdict
 
@@ -136,7 +136,19 @@ def run_evaluation(model_config):
     print(f"Running evaluation for model: {model_name}")
     print(f"Command: {' '.join(base_cmd)}")
     
-    subprocess.run(base_cmd)
+    # inherit all environment and run command 
+    current_env = os.environ.copy()
+    python_executable = sys.executable
+    conda_bin_dir = os.path.dirname(python_executable)
+
+    # Prepend the conda bin directory to the PATH in the subprocess environment
+    current_env["PATH"] = f"{conda_bin_dir}:{current_env['PATH']}"
+
+    result = subprocess.run(
+        base_cmd,
+        env=current_env, # Passes the Slurm & Conda variables
+        check=True
+    )
 
 
 def calculate_class_averages(model_name):

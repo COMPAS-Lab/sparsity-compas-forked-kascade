@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModelForCausalLM, PreTrainedModel
 import torch
 import re
 
@@ -14,7 +14,7 @@ def get_tokenizer_and_model(model_name, attn_implementation, device):
             tokenizer.add_special_tokens({'pad_token': tokenizer.eos_token})
 
     model_kwargs = {
-        "torch_dtype": "auto",
+        "torch_dtype": torch.float16,
         "attn_implementation": attn_implementation,
         "cache_dir": "/dev/shm",
         "pretrained_model_name_or_path": model_name,
@@ -42,6 +42,35 @@ def get_tokenizer_and_model(model_name, attn_implementation, device):
 
     return model, tokenizer
 
+def get_attn_out_stat_profile(model, extracted_data_mean = {}, extracted_data_std = {}):
+    def get_activation_hook(layer_name):
+        def hook(module, input, output):
+            curr_out = None
+            if isinstance(output, tuple):
+                curr_out = output[0]
+            else:
+                curr_out = output
+
+            curr_out_mean, curr_out_std = curr_out.mean(dim=(-2, -1), keepdim=True).detach().cpu().numpy(), \
+                                            curr_out.std(dim=(-2, -1), keepdim=True).detach().cpu().numpy()
+            extracted_data_mean[layer_name] = extracted_data_mean.get(layer_name, []) + [curr_out_mean]
+            extracted_data_std[layer_name] = extracted_data_std.get(layer_name, []) + [curr_out_std]
+
+        return hook
+
+    model_name = model.name_or_path.lower()
+    handles = []
+
+    if "llama" in model_name or "qwen3" in model_name:
+        n_layers = model.config.num_hidden_layers
+        for l in range(n_layers):
+            handles.append(model.model.layers[l].self_attn.register_forward_hook(
+                get_activation_hook(f"layer_{l}")
+            ))
+    
+    return handles
+    
+    
 def get_inst_tokens(model_name, use_sys_token = False, enable_thinking = False):
     inst_token_dict = {
         "deepseek": ["<｜{}｜>", "", "<think>\n"],

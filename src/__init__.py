@@ -20,6 +20,7 @@ from .model_utils import (
     get_tokenizer_and_model,
     get_inst_tokens,
     get_eos_token_ids,
+    get_attn_out_stat_profile,
 )
 
 __version__ = "0.1.0"
@@ -33,4 +34,5 @@ __all__ = [
     "get_tokenizer_and_model",
     "get_inst_tokens",
     "get_eos_token_ids",
+    "get_attn_out_stat_profile",
 ]

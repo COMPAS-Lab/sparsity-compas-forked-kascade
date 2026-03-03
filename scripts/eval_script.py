@@ -2,8 +2,9 @@
 # Licensed under the MIT License.
 
 import argparse
+from pathlib import Path
 from accelerate import Accelerator
-from kascade.model_utils import get_tokenizer_and_model, get_inst_tokens, get_eos_token_ids
+from kascade.model_utils import get_tokenizer_and_model, get_inst_tokens, get_eos_token_ids, get_attn_out_stat_profile
 from kascade.dataset2config import *
 from kascade.strategies import *
 from accelerate.utils import InitProcessGroupKwargs
@@ -13,12 +14,14 @@ from datasets import load_dataset
 from transformers import set_seed
 from transformers.utils import is_flash_attn_2_available, is_flash_attn_3_available
 import torch
+import numpy as np
 
 def main():
     # Parse the arguments
     parser = argparse.ArgumentParser("eval_script.py")
     strategy_choices = [
         "baseline",
+        "baseline_profile",
         "sinked_sliding_window",
         "oracle_topk",
         "oracle_topk_layer0_global",
@@ -94,7 +97,7 @@ def main():
 
     # Loop: models -> strategies -> subsets
     for strategy_name in args.strategies:
-        if strategy_name == "efficient_kascade" and model.config.dtype != torch.float16:
+        if strategy_name == "efficient_kascade" and model.config.torch_dtype != torch.float16:
             raise ValueError("Efficient Kascade strategy requires model to be in float16 precision. Please go to line 17 in src/model_utils.py and change torch_dtype=torch.float16 when loading the model for running with efficient_kascade.")
 
         set_seed(args.seed) # Ensure reproducibility per run
@@ -102,6 +105,7 @@ def main():
         # Create strategy
         strategy2class = {
             "baseline": lambda: BaselineStrategy(),
+            "baseline_profile": lambda: BaselineStrategy(),
             "sinked_sliding_window": lambda: SinkedSlidingWindowStrategy(sliding_window=args.sliding_window, num_sink_tokens=args.num_sink_tokens),
             "oracle_topk": lambda: OracleTopkStrategy(k=args.topk),
             "oracle_topk_layer0_global": lambda: OracleTopkLayer0GlobalStrategy(k=args.topk),
@@ -122,10 +126,15 @@ def main():
         }
         
         strategy: Strategy = strategy2class[strategy_name]()
-        if strategy_name != "baseline":
+        if strategy_name != "baseline" and strategy_name != "baseline_profile":
             model.config._attn_implementation = strategy.name
-
         
+        offline_attn_out_stats_mean = {}
+        offline_attn_out_stats_std = {}
+        profile_hook_handlers = []
+        if strategy_name == "baseline_profile": 
+            profile_hook_handlers = get_attn_out_stat_profile(model, offline_attn_out_stats_mean, offline_attn_out_stats_std)
+
         for subset in subsets_to_run:
             # Determine dataset key for config lookups
             if subset is not None:
@@ -202,6 +211,25 @@ def main():
                 strategy.attach_stats_runner(runner)
             
             runner.run()
+
+        if strategy_name == "baseline_profile":
+            for handle in profile_hook_handlers:
+                handle.remove()
+
+            # layer_names = offline_attn_out_stats_mean.keys()
+            # for layer_name in layer_names:
+            #     layer_stats_mean = np.stack(offline_attn_out_stats_mean[layer_name]).mean(axis=0)
+            #     layer_stats_std = np.stack(offline_attn_out_stats_std[layer_name]).mean(axis=0)
+
+            print(offline_attn_out_stats_mean)
+                
+            if args.store_results:
+                offline_profile_fp = Path(f"./results/offline_attn_out_stats_profile")
+                if not offline_profile_fp.exists():
+                    offline_profile_fp.mkdir(parents=True)
+                formatted_model_name = args.model_name.split("/")[-1]
+                np.save(offline_profile_fp/f"{formatted_model_name}_mean.npy", offline_attn_out_stats_mean, allow_pickle=True)
+                np.save(offline_profile_fp/f"{formatted_model_name}_std.npy", offline_attn_out_stats_std, allow_pickle=True)
 
     accelerator.end_training()
 
