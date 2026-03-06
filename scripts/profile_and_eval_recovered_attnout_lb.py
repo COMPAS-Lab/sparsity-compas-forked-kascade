@@ -43,7 +43,7 @@ MODELS = [
             {"name": "kascade", "args": [
                 "--tile_size", "32",
                 "--rolling_prefill",
-                "--recompute_layers", "0", "2", "7", "13", "17", "23"
+                "--recompute_layers", "0", "2", "7", "14", "23"
             ]},
         ]
     },
@@ -54,7 +54,7 @@ MODELS = [
             {"name": "kascade", "args": [
                 "--tile_size", "32",
                 "--rolling_prefill",
-                "--recompute_layers", "0", "2", "4", "8", "13", "16"
+                "--recompute_layers", "0", "2", "8", "13", "14"
             ]},
         ]
     },

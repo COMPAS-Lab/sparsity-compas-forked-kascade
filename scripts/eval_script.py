@@ -10,7 +10,7 @@ from kascade.strategies import *
 from accelerate.utils import InitProcessGroupKwargs
 from datetime import timedelta
 from kascade.runners import MetricsRunner, StatsRunner, RunConfig
-from kascade.
+from kascade.attn_recovery import RecoveryMLP, RecoveryDualMLP
 from datasets import load_dataset
 from transformers import set_seed
 from transformers.utils import is_flash_attn_2_available, is_flash_attn_3_available
@@ -140,6 +140,11 @@ def main():
                                         model, 
                                         offline_attn_in_mean, offline_attn_in_std, 
                                         offline_attn_out_mean, offline_attn_out_std)
+        else:
+            if "_recovery" in strategy_name:
+                # load recovery model
+                pass
+            
 
         for subset in subsets_to_run:
             # Determine dataset key for config lookups

@@ -94,6 +94,28 @@ MODELS = [
     },
 ]
 
+MODELS = [
+    {
+        "name": "Qwen/Qwen3-8B",
+        "strategies": [
+            {"name": "kascade", "args": [
+                "--tile_size", "32",
+                "--rolling_prefill",
+                "--recompute_layers", "0", "2", "7", "14", "23"
+            ]},
+        ]
+    },
+    {
+        "name": "meta-llama/Meta-Llama-3.1-8B-Instruct",
+        "strategies": [
+            {"name": "kascade", "args": [
+                "--tile_size", "32",
+                "--rolling_prefill",
+                "--recompute_layers", "0", "2", "8", "13", "14"
+            ]},
+        ]
+    },
+]
 
 def run_evaluation(model_config):
     """Run evaluation for a model across all LongBench subsets and strategies"""
