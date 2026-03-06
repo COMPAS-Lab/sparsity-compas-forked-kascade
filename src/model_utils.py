@@ -42,19 +42,40 @@ def get_tokenizer_and_model(model_name, attn_implementation, device):
 
     return model, tokenizer
 
-def get_attn_out_stat_profile(model, extracted_data_mean = {}, extracted_data_std = {}):
+def get_attn_out_stat_profile(model, 
+                                extracted_attn_in_mean = {}, extracted_attn_in_std = {},
+                                extracted_attn_out_mean = {}, extracted_attn_out_std = {}):
     def get_activation_hook(layer_name):
-        def hook(module, input, output):
+        def hook(module, input, kwargs, output):
             curr_out = None
             if isinstance(output, tuple):
                 curr_out = output[0]
             else:
                 curr_out = output
 
-            curr_out_mean, curr_out_std = curr_out.mean(dim=(-2, -1), keepdim=True).detach().cpu().numpy(), \
-                                            curr_out.std(dim=(-2, -1), keepdim=True).detach().cpu().numpy()
-            extracted_data_mean[layer_name] = extracted_data_mean.get(layer_name, []) + [curr_out_mean]
-            extracted_data_std[layer_name] = extracted_data_std.get(layer_name, []) + [curr_out_std]
+            curr_in = kwargs.get("hidden_states", None)
+            if curr_in is None and len(input) > 0:
+                curr_in = input[0]
+            
+            curr_in = curr_in.reshape(-1, curr_in.shape[-1])
+            curr_out = curr_out.reshape(-1, curr_out.shape[-1])
+
+            print("curr_in shape: ", curr_in.shape)
+            print("curr_out shape: ", curr_out.shape)
+
+            # expected input dim: (batch * seqlen, hidden_size)
+            # expected output dim: (batch * seqlen, 1)
+            curr_in_mean, curr_in_std = \
+                curr_in.mean(dim=-1, keepdims=True).detach().cpu().numpy().astype(float), \
+                curr_in.std(dim=-1, keepdims=True).detach().cpu().numpy().astype(float)
+            extracted_attn_in_mean[layer_name] = extracted_attn_in_mean.get(layer_name, []) + [curr_in_mean]
+            extracted_attn_in_std[layer_name] = extracted_attn_in_std.get(layer_name, []) + [curr_in_std]
+            
+            curr_out_mean, curr_out_std = \
+                curr_out.mean(dim=-1, keepdims=True).detach().cpu().numpy().astype(float), \
+                curr_out.std(dim=-1, keepdims=True).detach().cpu().numpy().astype(float)
+            extracted_attn_out_mean[layer_name] = extracted_attn_out_mean.get(layer_name, []) + [curr_out_mean]
+            extracted_attn_out_std[layer_name] = extracted_attn_out_std.get(layer_name, []) + [curr_out_std]
 
         return hook
 
@@ -65,7 +86,7 @@ def get_attn_out_stat_profile(model, extracted_data_mean = {}, extracted_data_st
         n_layers = model.config.num_hidden_layers
         for l in range(n_layers):
             handles.append(model.model.layers[l].self_attn.register_forward_hook(
-                get_activation_hook(f"layer_{l}")
+                get_activation_hook(f"layer_{l}"), with_kwargs=True
             ))
     
     return handles

@@ -10,6 +10,7 @@ from kascade.strategies import *
 from accelerate.utils import InitProcessGroupKwargs
 from datetime import timedelta
 from kascade.runners import MetricsRunner, StatsRunner, RunConfig
+from kascade.
 from datasets import load_dataset
 from transformers import set_seed
 from transformers.utils import is_flash_attn_2_available, is_flash_attn_3_available
@@ -129,11 +130,16 @@ def main():
         if strategy_name != "baseline" and strategy_name != "baseline_profile":
             model.config._attn_implementation = strategy.name
         
-        offline_attn_out_stats_mean = {}
-        offline_attn_out_stats_std = {}
+        offline_attn_out_mean = {}
+        offline_attn_out_std = {}
+        offline_attn_in_mean = {}
+        offline_attn_in_std = {}
         profile_hook_handlers = []
         if strategy_name == "baseline_profile": 
-            profile_hook_handlers = get_attn_out_stat_profile(model, offline_attn_out_stats_mean, offline_attn_out_stats_std)
+            profile_hook_handlers = get_attn_out_stat_profile(
+                                        model, 
+                                        offline_attn_in_mean, offline_attn_in_std, 
+                                        offline_attn_out_mean, offline_attn_out_std)
 
         for subset in subsets_to_run:
             # Determine dataset key for config lookups
@@ -215,21 +221,16 @@ def main():
         if strategy_name == "baseline_profile":
             for handle in profile_hook_handlers:
                 handle.remove()
-
-            # layer_names = offline_attn_out_stats_mean.keys()
-            # for layer_name in layer_names:
-            #     layer_stats_mean = np.stack(offline_attn_out_stats_mean[layer_name]).mean(axis=0)
-            #     layer_stats_std = np.stack(offline_attn_out_stats_std[layer_name]).mean(axis=0)
-
-            print(offline_attn_out_stats_mean)
                 
             if args.store_results:
-                offline_profile_fp = Path(f"./results/offline_attn_out_stats_profile")
+                offline_profile_fp = Path(f"./results/attn_recovery/train")
                 if not offline_profile_fp.exists():
                     offline_profile_fp.mkdir(parents=True)
                 formatted_model_name = args.model_name.split("/")[-1]
-                np.save(offline_profile_fp/f"{formatted_model_name}_mean.npy", offline_attn_out_stats_mean, allow_pickle=True)
-                np.save(offline_profile_fp/f"{formatted_model_name}_std.npy", offline_attn_out_stats_std, allow_pickle=True)
+                np.save(offline_profile_fp/f"{formatted_model_name}_input_mean.npy", offline_attn_in_mean, allow_pickle=True)
+                np.save(offline_profile_fp/f"{formatted_model_name}_input_std.npy", offline_attn_in_std, allow_pickle=True)
+                np.save(offline_profile_fp/f"{formatted_model_name}_output_mean.npy", offline_attn_out_mean, allow_pickle=True)
+                np.save(offline_profile_fp/f"{formatted_model_name}_output_std.npy", offline_attn_out_std, allow_pickle=True)
 
     accelerator.end_training()
 

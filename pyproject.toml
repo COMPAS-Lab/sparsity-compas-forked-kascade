@@ -50,4 +50,4 @@ Repository = "https://github.com/your-org/kascade"
 
 [tool.setuptools]
 package-dir = {"kascade" = "src"}
-packages = ["kascade", "kascade.kernels", "kascade.kernels.flash_attention", "kascade.kernels.flash_decoding", "kascade.metrics", "kascade.qadatasets", "kascade.runners", "kascade.strategies"]
+packages = ["kascade", "kascade.kernels", "kascade.kernels.flash_attention", "kascade.kernels.flash_decoding", "kascade.metrics", "kascade.qadatasets", "kascade.runners", "kascade.strategies", "kascade.attn_recovery"]

@@ -6,6 +6,7 @@ import subprocess
 import sys
 import csv
 from collections import defaultdict
+from random import sample
 
 TOPK = 10  # Fixed TopK for LongBench evaluations
 
@@ -18,6 +19,9 @@ longbench_datasets = [
     "passage_count", "passage_retrieval_en", "passage_retrieval_zh", 
     "lcc", "repobench-p"
 ]
+
+# select 3 random datasets for profiling
+longbench_datasets_profile = sample(longbench_datasets, 3)
 
 # Class mappings for averaging
 dataset_classes = [0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 5, 5]
@@ -74,27 +78,16 @@ def run_profile(model_config, num_queries=1):
     base_cmd.extend(["--dataset_name", "THUDM/LongBench"])
     
     # Add all subsets
-    base_cmd.extend(["--subsets"] + longbench_datasets)
+    base_cmd.extend(["--subsets"] + longbench_datasets_profile)
     
-    # Add all strategy names
+    # hardcode strategy name as baseline_profile
     strategy_names = ["baseline_profile"]
     base_cmd.extend(["--strategies"] + strategy_names)
     
     # Calculate num_queries (use max for simplicity)
     base_cmd.extend(["--num_queries", str(num_queries)])
     base_cmd.extend(["--topk", str(TOPK)])
-    
-    # Enable result storage
-    base_cmd.append("--store_results")
-    
-    # Add strategy-specific arguments (assumes they apply globally for this model)
-    # Note: This collects all unique args from all strategies
-    # If strategies have conflicting args, you may need to run separately
-    all_args = []
-    for strategy in strategies:
-        all_args.extend(strategy["args"])
-    
-    base_cmd.extend(all_args)
+    base_cmd.extend(["--store_results"])
     
     print(f"Running evaluation for model: {model_name}")
     print(f"Command: {' '.join(base_cmd)}")
@@ -118,7 +111,7 @@ def main():
     """Main profile loop"""
     # Run profile for all models
     for model_config in MODELS:
-        run_profile(model_config, num_queries=1)
+        run_profile(model_config, num_queries=5)
 
 
 if __name__ == "__main__":
