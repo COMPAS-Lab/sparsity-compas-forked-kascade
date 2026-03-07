@@ -1,4 +1,4 @@
-from kascade.attn_recovery import RecoveryMLP, RecoverySharedTrunkMLP, RecoveryDualMLP
+from kascade.attn_recovery import RecoveryMLP
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset, random_split
@@ -9,7 +9,7 @@ import argparse
 from tqdm import tqdm
 import pandas as pd
 
-def load_training_data(base_path: Path, model_name: str, layer_id=-1):
+def load_training_data(base_path: Path, model_name: str):
     # load training files
     input_mean_path = base_path / f"{model_name}_input_mean.npy"
     input_std_path = base_path / f"{model_name}_input_std.npy"
@@ -24,14 +24,10 @@ def load_training_data(base_path: Path, model_name: str, layer_id=-1):
     # n_layers has the format "layer_<layer number>"
     print(f"detect {len(n_layers)} layers from model {model_name}")
 
-    attn_ins_data, attn_outs_data = [], []
-    attn_data_layer_ids = []
-    attn_ins_test, attn_outs_test = [], []
-    attn_data_layer_ids_test = []
+    attn_ins_data, attn_outs_data = {}, {}
+    attn_ins_test, attn_outs_test = {}, {}
 
     for l in n_layers:
-        if layer_id != -1 and int(l.split("_")[-1]) != layer_id:
-            continue
         # each layer contains many iterations, prefill and decode iters 
         # are not distinguished here
         # find the last elements in input_mean[l] that has shape[0] > 1, that
@@ -50,59 +46,38 @@ def load_training_data(base_path: Path, model_name: str, layer_id=-1):
         curr_output_mean = np.concatenate(output_mean[l][:last_inst_start_id], axis=0)
         curr_output_std = np.concatenate(output_std[l][:last_inst_start_id], axis=0)
 
-        curr_batch_size = curr_input_mean.shape[0]
-        layer_id_val = int(l.split("_")[-1])
-        layer_ids = np.array([layer_id_val] * curr_batch_size)
-        curr_test_size = curr_input_mean_test.shape[0]
-        layer_ids_test = np.array([layer_id_val] * curr_test_size)
-
         curr_attn_ins_test = np.concatenate([curr_input_mean_test, curr_input_std_test], axis=-1)
         curr_attn_outs_test = np.concatenate([curr_output_mean_test, curr_output_std_test], axis=-1)
         curr_attn_ins = np.concatenate([curr_input_mean, curr_input_std], axis=-1)
         curr_attn_outs = np.concatenate([curr_output_mean, curr_output_std], axis=-1)
 
-
         # check dimensions
-        assert(len(curr_attn_ins) == len(curr_attn_outs) and \
-                len(curr_attn_ins) == len(layer_ids))
-        assert(len(curr_attn_ins_test) == len(curr_attn_outs_test) and \
-                len(curr_attn_ins_test) == len(layer_ids_test))
+        assert(len(curr_attn_ins) == len(curr_attn_outs))
+        assert(len(curr_attn_ins_test) == len(curr_attn_outs_test))
 
         # attach curr iter data
-        attn_ins_test.append(curr_attn_ins_test)
-        attn_outs_test.append(curr_attn_outs_test)
-        attn_data_layer_ids_test.append(layer_ids_test)
+        attn_ins_test[l] = torch.tensor(curr_attn_ins_test, dtype=float)
+        attn_outs_test[l] = torch.tensor(curr_attn_outs_test, dtype=float)
+        attn_ins_data[l] = torch.tensor(curr_attn_ins, dtype=float)
+        attn_outs_data[l] = torch.tensor(curr_attn_outs, dtype=float)
 
-        attn_ins_data.append(curr_attn_ins)
-        attn_outs_data.append(curr_attn_outs)
-        attn_data_layer_ids.append(layer_ids)
+        print(f"train+validation set at {l}: attn ins size: {attn_ins_data[l].size()}, attn outs size: {attn_outs_data[l].size()}")
+        print(f"test set at {l}: attn ins size: {attn_ins_test[l].size()}, attn outs size: {attn_outs_test[l].size()}")
         
         del input_mean[l]
         del input_std[l]
         del output_mean[l]
         del output_std[l]
 
-    # concat all generated data
-    attn_ins_test = torch.tensor(np.concatenate(attn_ins_test, axis=0), dtype=float)
-    attn_outs_test = torch.tensor(np.concatenate(attn_outs_test, axis=0), dtype=float)
-    attn_data_layer_ids_test = torch.tensor(np.concatenate(attn_data_layer_ids_test, axis=0), dtype=int)
-
-    attn_ins_data = torch.tensor(np.concatenate(attn_ins_data, axis=0), dtype=float)
-    attn_outs_data = torch.tensor(np.concatenate(attn_outs_data, axis=0), dtype=float)
-    attn_layer_ids = torch.tensor(np.concatenate(attn_data_layer_ids, axis=0), dtype=int)
-
-    print(f"data loader: attn ins size: {attn_ins_data.size()}, attn outs size: {attn_outs_data.size()}, layer id size: {attn_layer_ids.size()}")
-    print(f"test set: attn ins size: {attn_ins_test.size()}, attn outs size: {attn_outs_test.size()}, layer id size: {attn_data_layer_ids_test.size()}")
-
     ret = {
-        "train": (attn_ins_data, attn_outs_data, attn_layer_ids),
-        "test": (attn_ins_test, attn_outs_test, attn_data_layer_ids_test), 
-        "n_layers": len(n_layers)
+        "train": (attn_ins_data, attn_outs_data),
+        "test": (attn_ins_test, attn_outs_test), 
+        "n_layers": n_layers
     }
 
     return ret
 
-def prepare_recovery_dataloaders(attn_ins, layer_ids, expected_outputs, 
+def prepare_recovery_dataloaders(attn_ins, expected_outputs, 
                                     batch_size=1024, train_ratio=0.9, seed=42):
     """
     Transforms raw tensors into Train and Test DataLoaders.
@@ -116,11 +91,10 @@ def prepare_recovery_dataloaders(attn_ins, layer_ids, expected_outputs,
     # 1. Ensure correct dtypes and shapes
     # layer_ids must be Long for the Embedding layer; squeeze to [N]
     attn_ins = attn_ins.to(torch.float32)
-    layer_ids = layer_ids.to(torch.long).squeeze()
     expected_outputs = expected_outputs.to(torch.float32)
 
     # 2. Create the unified Dataset
-    full_dataset = TensorDataset(attn_ins, layer_ids, expected_outputs)
+    full_dataset = TensorDataset(attn_ins, expected_outputs)
 
     # 3. Calculate split lengths
     total_size = len(full_dataset)
@@ -237,13 +211,12 @@ def train_recovery_mlp(
         train_loss = 0.0
         
         # 1. Training Phase
-        for batch_x, batch_layers, batch_y in tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}"):
+        for batch_x, batch_y in tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}"):
             batch_x = batch_x.to(device)
-            batch_layers = batch_layers.to(device)
             batch_y = batch_y.to(device)
             
             # Forward pass: pred is (mean, std)
-            pred_mean, pred_std = model(batch_x, batch_layers)
+            pred_mean, pred_std = model(batch_x)
             
             # Calculate combined loss
             loss = vector_distance_loss(pred_mean, pred_std, batch_y[:, 0:1], batch_y[:, 1:2])
@@ -265,10 +238,10 @@ def train_recovery_mlp(
         all_targets_std = []
         
         with torch.no_grad():
-            for batch_x, batch_layers, batch_y in validate_loader:
-                batch_x, batch_layers, batch_y = batch_x.to(device), batch_layers.to(device), batch_y.to(device)
+            for batch_x, batch_y in validate_loader:
+                batch_x, batch_y = batch_x.to(device), batch_y.to(device)
                 
-                p_mean, p_std = model(batch_x, batch_layers)
+                p_mean, p_std = model(batch_x)
                 v_loss = vector_distance_loss(p_mean, p_std, batch_y[:, 0:1], batch_y[:, 1:2])
                 val_loss += v_loss.item()
                 
@@ -339,10 +312,10 @@ def test_recovery_mlp(
     all_targets_std = []
 
     with torch.no_grad():
-        for batch_x, batch_layers, batch_y in test_loader:
-            batch_x, batch_layers, batch_y = batch_x.to(device), batch_layers.to(device), batch_y.to(device)
+        for batch_x, batch_y in test_loader:
+            batch_x, batch_y = batch_x.to(device), batch_y.to(device)
             
-            p_mean, p_std = model(batch_x, batch_layers)
+            p_mean, p_std = model(batch_x)
             v_loss = vector_distance_loss(p_mean, p_std, batch_y[:, 0:1], batch_y[:, 1:2])
             val_loss += v_loss.item()
             
@@ -388,28 +361,29 @@ def main():
 
     # disassemble data for data loader preparation
     n_layers = loaded_raw_data["n_layers"]
-    attn_ins, attn_outs, layer_ids = loaded_raw_data["train"]
-    attn_ins_test, attn_outs_test, layer_ids_test = loaded_raw_data["test"]
+    attn_ins, attn_outs = loaded_raw_data["train"]
+    attn_ins_test, attn_outs_test = loaded_raw_data["test"]
 
-    train_loader, validate_loader = \
-        prepare_recovery_dataloaders(attn_ins, layer_ids, attn_outs)
-    _, test_loader = \
-        prepare_recovery_dataloaders(attn_ins_test, layer_ids_test, attn_outs_test, train_ratio=0.0)
+    # train each mlp for each layer, save them separately
+    for l in n_layers:
+        print(f"training {l}...")
+        train_loader, validate_loader = \
+            prepare_recovery_dataloaders(attn_ins[l], attn_outs[l])
+        _, test_loader = \
+            prepare_recovery_dataloaders(attn_ins_test[l], attn_outs_test[l], train_ratio=0.0)
 
-    # start training
-    model = RecoveryMLP(num_layers=n_layers, hidden_dim=hidden_dim).cuda()
-    # model = RecoverySharedTrunkMLP(num_layers=n_layers, hidden_dim=hidden_dim).cuda()
-    # model = RecoveryDualMLP(num_layers=n_layers, hidden_dim=hidden_dim).cuda()
+        # start training
+        model = RecoveryMLP(hidden_dim=hidden_dim).cuda()
 
-    model_path.mkdir(parents=True, exist_ok=True)
-    save_path = model_path / f"{args.model_name}_recovery_mlp_{hidden_dim}.pt"
-    trained_model = \
-        train_recovery_mlp(model, train_loader, validate_loader, model_save_path=save_path, patience=10)
-    print(f"Model saved to {save_path}")
+        model_path.mkdir(parents=True, exist_ok=True)
+        save_path = model_path / f"{args.model_name}_recovery_mlp_{hidden_dim}_{l}.pt"
+        trained_model = \
+            train_recovery_mlp(model, train_loader, validate_loader, model_save_path=save_path, patience=10)
+        print(f"Model saved to {save_path}")
 
-    # start testing
-    test_res_path = model_path / f"{args.model_name}_recovery_mlp_{hidden_dim}_test_log.csv"
-    test_recovery_mlp(trained_model, test_loader, result_path=test_res_path)
+        # start testing
+        test_res_path = model_path / f"{args.model_name}_recovery_mlp_{hidden_dim}_{l}_test_log.csv"
+        test_recovery_mlp(trained_model, test_loader, result_path=test_res_path)
 
 if __name__ == "__main__":
     main()

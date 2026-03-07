@@ -10,7 +10,7 @@ from kascade.strategies import *
 from accelerate.utils import InitProcessGroupKwargs
 from datetime import timedelta
 from kascade.runners import MetricsRunner, StatsRunner, RunConfig
-from kascade.attn_recovery import RecoveryMLP, RecoveryDualMLP
+from kascade.attn_recovery import RecoveryMLP
 from datasets import load_dataset
 from transformers import set_seed
 from transformers.utils import is_flash_attn_2_available, is_flash_attn_3_available
