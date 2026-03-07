@@ -7,5 +7,8 @@ class BaselineStrategy(Strategy):
     def __init__(self, name="baseline"):
         super().__init__(name)
     
-
+class BaselineProfileStrategy(Strategy):
+    def __init__(self, name="baseline_profile"):
+        super().__init__(name)
+    
     

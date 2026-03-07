@@ -1,5 +1,5 @@
 from .Strategy import Strategy
-from .BaselineStrategy import BaselineStrategy
+from .BaselineStrategy import BaselineStrategy, BaselineProfileStrategy
 from .SinkedSlidingWindowStrategy import SinkedSlidingWindowStrategy
 
 from .OracleTopkStrategy import OracleTopkStrategy
@@ -26,6 +26,7 @@ from .LessIsMoreStrategy import LessIsMoreStrategy
 __all__ = [
     "Strategy",
     "BaselineStrategy",
+    "BaselineProfileStrategy",
     "SinkedSlidingWindowStrategy",
     "OracleTopkStrategy",
     "OracleTopkLayer0GlobalStrategy",

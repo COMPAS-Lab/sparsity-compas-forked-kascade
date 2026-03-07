@@ -7,7 +7,7 @@ import sys
 import csv
 from collections import defaultdict
 
-TOPK = 10  # Fixed TopK for LongBench evaluations
+TOPK = 5  # Fixed TopK for LongBench evaluations
 
 # LongBench datasets
 longbench_datasets = [

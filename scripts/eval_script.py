@@ -106,7 +106,7 @@ def main():
         # Create strategy
         strategy2class = {
             "baseline": lambda: BaselineStrategy(),
-            "baseline_profile": lambda: BaselineStrategy(),
+            "baseline_profile": lambda: BaselineProfileStrategy(),
             "sinked_sliding_window": lambda: SinkedSlidingWindowStrategy(sliding_window=args.sliding_window, num_sink_tokens=args.num_sink_tokens),
             "oracle_topk": lambda: OracleTopkStrategy(k=args.topk),
             "oracle_topk_layer0_global": lambda: OracleTopkLayer0GlobalStrategy(k=args.topk),
