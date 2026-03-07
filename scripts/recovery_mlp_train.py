@@ -1,4 +1,4 @@
-from kascade.attn_recovery import RecoveryMLP, RecoveryDualMLP
+from kascade.attn_recovery import RecoveryMLP, RecoverySharedTrunkMLP, RecoveryDualMLP
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset, random_split
@@ -20,43 +20,87 @@ def load_training_data(base_path: Path, model_name: str, layer_id=-1):
     output_mean = np.load(output_mean_path, allow_pickle=True).item()
     output_std = np.load(output_std_path, allow_pickle=True).item()
 
-    n_layers = input_mean.keys()
+    n_layers = list(input_mean.keys())
     # n_layers has the format "layer_<layer number>"
     print(f"detect {len(n_layers)} layers from model {model_name}")
 
     attn_ins_data, attn_outs_data = [], []
     attn_data_layer_ids = []
+    attn_ins_test, attn_outs_test = [], []
+    attn_data_layer_ids_test = []
+
     for l in n_layers:
         if layer_id != -1 and int(l.split("_")[-1]) != layer_id:
             continue
         # each layer contains many iterations, prefill and decode iters 
         # are not distinguished here
-        curr_input_mean = np.concatenate(input_mean[l], axis=0)
-        curr_input_std = np.concatenate(input_std[l], axis=0)
-        curr_output_mean = np.concatenate(output_mean[l], axis=0)
-        curr_output_std = np.concatenate(output_std[l], axis=0)
+        # find the last elements in input_mean[l] that has shape[0] > 1, that
+        # is the start of the last instances. 
+        # Use it as test set
+        inst_dim_0 = np.array([iter_dat.shape[0] for iter_dat in input_mean[l]])
+        last_inst_start_id = np.where(inst_dim_0 > 1)[0][-1]
+
+        curr_input_mean_test = np.concatenate(input_mean[l][last_inst_start_id:], axis=0)
+        curr_input_std_test = np.concatenate(input_std[l][last_inst_start_id:], axis=0)
+        curr_output_mean_test = np.concatenate(output_mean[l][last_inst_start_id:], axis=0)
+        curr_output_std_test = np.concatenate(output_std[l][last_inst_start_id:], axis=0)
+
+        curr_input_mean = np.concatenate(input_mean[l][:last_inst_start_id], axis=0)
+        curr_input_std = np.concatenate(input_std[l][:last_inst_start_id], axis=0)
+        curr_output_mean = np.concatenate(output_mean[l][:last_inst_start_id], axis=0)
+        curr_output_std = np.concatenate(output_std[l][:last_inst_start_id], axis=0)
 
         curr_batch_size = curr_input_mean.shape[0]
-        layer_ids = int(l.split("_")[-1])
-        layer_ids = np.array([layer_ids] * curr_batch_size)
+        layer_id_val = int(l.split("_")[-1])
+        layer_ids = np.array([layer_id_val] * curr_batch_size)
+        curr_test_size = curr_input_mean_test.shape[0]
+        layer_ids_test = np.array([layer_id_val] * curr_test_size)
 
+        curr_attn_ins_test = np.concatenate([curr_input_mean_test, curr_input_std_test], axis=-1)
+        curr_attn_outs_test = np.concatenate([curr_output_mean_test, curr_output_std_test], axis=-1)
         curr_attn_ins = np.concatenate([curr_input_mean, curr_input_std], axis=-1)
         curr_attn_outs = np.concatenate([curr_output_mean, curr_output_std], axis=-1)
+
 
         # check dimensions
         assert(len(curr_attn_ins) == len(curr_attn_outs) and \
                 len(curr_attn_ins) == len(layer_ids))
+        assert(len(curr_attn_ins_test) == len(curr_attn_outs_test) and \
+                len(curr_attn_ins_test) == len(layer_ids_test))
+
+        # attach curr iter data
+        attn_ins_test.append(curr_attn_ins_test)
+        attn_outs_test.append(curr_attn_outs_test)
+        attn_data_layer_ids_test.append(layer_ids_test)
+
         attn_ins_data.append(curr_attn_ins)
         attn_outs_data.append(curr_attn_outs)
         attn_data_layer_ids.append(layer_ids)
+        
+        del input_mean[l]
+        del input_std[l]
+        del output_mean[l]
+        del output_std[l]
 
     # concat all generated data
+    attn_ins_test = torch.tensor(np.concatenate(attn_ins_test, axis=0), dtype=float)
+    attn_outs_test = torch.tensor(np.concatenate(attn_outs_test, axis=0), dtype=float)
+    attn_data_layer_ids_test = torch.tensor(np.concatenate(attn_data_layer_ids_test, axis=0), dtype=int)
+
     attn_ins_data = torch.tensor(np.concatenate(attn_ins_data, axis=0), dtype=float)
     attn_outs_data = torch.tensor(np.concatenate(attn_outs_data, axis=0), dtype=float)
     attn_layer_ids = torch.tensor(np.concatenate(attn_data_layer_ids, axis=0), dtype=int)
-    print(f"data loader: attn ins size: {attn_ins_data.size()}, attn outs size: {attn_outs_data.size()}, layer id size: {attn_layer_ids.size()}")
 
-    return attn_ins_data, attn_outs_data, attn_layer_ids, len(n_layers)
+    print(f"data loader: attn ins size: {attn_ins_data.size()}, attn outs size: {attn_outs_data.size()}, layer id size: {attn_layer_ids.size()}")
+    print(f"test set: attn ins size: {attn_ins_test.size()}, attn outs size: {attn_outs_test.size()}, layer id size: {attn_data_layer_ids_test.size()}")
+
+    ret = {
+        "train": (attn_ins_data, attn_outs_data, attn_layer_ids),
+        "test": (attn_ins_test, attn_outs_test, attn_data_layer_ids_test), 
+        "n_layers": len(n_layers)
+    }
+
+    return ret
 
 def prepare_recovery_dataloaders(attn_ins, layer_ids, expected_outputs, 
                                     batch_size=1024, train_ratio=0.9, seed=42):
@@ -91,20 +135,26 @@ def prepare_recovery_dataloaders(attn_ins, layer_ids, expected_outputs,
     )
 
     # 5. Create DataLoaders
-    train_loader = DataLoader(
-        train_dataset, 
-        batch_size=batch_size, 
-        shuffle=True,
-        num_workers=4,
-        pin_memory=True
-    )
+    if len(train_dataset) > 0:
+        train_loader = DataLoader(
+            train_dataset, 
+            batch_size=batch_size, 
+            shuffle=True,
+            num_workers=4,
+            pin_memory=True
+        )
+    else:
+        train_loader = None
     
-    test_loader = DataLoader(
-        test_dataset, 
-        batch_size=batch_size, 
-        shuffle=False,
-        pin_memory=True
-    )
+    if len(test_dataset) > 0:
+        test_loader = DataLoader(
+            test_dataset, 
+            batch_size=batch_size, 
+            shuffle=False,
+            pin_memory=True
+        )
+    else:
+        test_loader = None
 
     print(f"Dataset Split: {train_size} train samples, {test_size} test samples.")
     return train_loader, test_loader
@@ -125,31 +175,12 @@ def r2_score(y_true, y_pred):
     ss_tot = torch.sum((y_true - torch.mean(y_true)) ** 2)
     return 1 - (ss_res / ss_tot)
 
-def avg_l2_dist(pred_mu, pred_std, target_mu, target_std):
+def avg_norm_dist(pred_mu, pred_std, target_mu, target_std):
     # Inputs are tensors of shape [N, 1]
     
     # 1. Compute absolute errors
-    mu_err = (target_mu - pred_mu)**2
-    std_err = (target_std - pred_std)**2
-    
-    # 2. Treat as a 2D vector distance per token
-    dist = torch.sqrt(mu_err + std_err) # L2 distance in mu-std space
-    
-    # 3. Calculate Mean Distance
-    avg_dist = torch.mean(dist)
-    
-    # 4. (Optional) Relative distance compared to the target magnitude
-    target_mag = torch.sqrt(target_mu**2 + target_std**2 + 1e-6)
-    rel_dist = torch.mean(dist / target_mag)
-    
-    return avg_dist.item(), rel_dist.item()
-
-def avg_dist(pred_mu, pred_std, target_mu, target_std):
-    # Inputs are tensors of shape [N, 1]
-    
-    # 1. Compute absolute errors
-    mu_err = abs(target_mu - pred_mu)
-    std_err = abs(target_std - pred_std)
+    mu_err = abs(target_mu - pred_mu) / (abs(target_mu) + 1e-8)
+    std_err = abs(target_std - pred_std) / target_std
     
     # 2. Calculate Mean Distance
     avg_dist_mu = torch.mean(mu_err)
@@ -170,7 +201,7 @@ def vector_distance_loss(pred_mean, pred_std, target_mean, target_std):
 def train_recovery_mlp(
     model, 
     train_loader, 
-    test_loader, 
+    validate_loader, 
     epochs=100, 
     lr=1e-3, 
     patience=5,
@@ -179,7 +210,7 @@ def train_recovery_mlp(
     model_save_path=Path(""),
 ):
     """
-    Trains the RecoveryOracle to predict unpruned attention moments.
+    Trains the RecoveryMLP to predict unpruned attention moments.
     """
     model.to(device)
     # Weight decay helps prevent overfitting to specific token patterns
@@ -195,7 +226,7 @@ def train_recovery_mlp(
     best_val_loss = float('inf')
     epochs_no_improve = False
     history = {
-        'train': [], 'val': [], 
+        'train_l2_dist': [], 'val_l2_dist': [], 
         'avg_mu_err': [], 'avg_std_err': [], 
     }
     
@@ -234,7 +265,7 @@ def train_recovery_mlp(
         all_targets_std = []
         
         with torch.no_grad():
-            for batch_x, batch_layers, batch_y in test_loader:
+            for batch_x, batch_layers, batch_y in validate_loader:
                 batch_x, batch_layers, batch_y = batch_x.to(device), batch_layers.to(device), batch_y.to(device)
                 
                 p_mean, p_std = model(batch_x, batch_layers)
@@ -249,7 +280,7 @@ def train_recovery_mlp(
 
         # 3. Calculate Metrics
         avg_train = train_loss / len(train_loader)
-        avg_val = val_loss / len(test_loader)
+        avg_val = val_loss / len(validate_loader)
         
         # Simple R^2 calculation: 1 - (SS_res / SS_tot)
         all_preds_mean = torch.cat(all_preds_mean, dim=0)
@@ -259,18 +290,18 @@ def train_recovery_mlp(
         all_targets_std = torch.cat(all_targets_std, dim=0)
 
         avg_dist_mu, avg_dist_std = \
-            avg_dist(all_preds_mean, all_preds_std, all_targets_mean, all_targets_std)
+            avg_norm_dist(all_preds_mean, all_preds_std, all_targets_mean, all_targets_std)
 
-        history['train'].append(avg_train)
-        history['val'].append(avg_val)
+        history['train_l2_dist'].append(avg_train)
+        history['val_l2_dist'].append(avg_val)
         history['avg_mu_err'].append(avg_dist_mu)
         history['avg_std_err'].append(avg_dist_std)
 
-        print(f'''Epoch {epoch+1}: 
-                Train Loss: {avg_train:.6f} | 
-                Val Loss: {avg_val:.6f} | 
-                avg dist mu: {avg_dist_mu:.4f} | 
-                avg dist std: {avg_dist_std:.4f}''')
+        print(f"Epoch {epoch+1}: " + \
+                f"Train Loss: {avg_train:.6f} | " + \
+                f"Val Loss: {avg_val:.6f} | " + \
+                f"avg mu err: {avg_dist_mu:.4f} | " + \
+                f"avg std err: {avg_dist_std:.4f}")
 
         # Check if the improvement is greater than min_delta
         if avg_val < (best_val_loss - min_delta):
@@ -293,6 +324,52 @@ def train_recovery_mlp(
     history_df.to_csv(model_save_path.parent / model_train_log_path, index=False)
     return model
 
+def test_recovery_mlp(
+    model, 
+    test_loader, 
+    device="cuda",
+    result_path=Path(""),
+):
+    model.eval()
+    val_loss = 0.0
+    # separately consider R^2 of mean and std
+    all_preds_mean = []
+    all_targets_mean = []
+    all_preds_std = []
+    all_targets_std = []
+
+    with torch.no_grad():
+        for batch_x, batch_layers, batch_y in test_loader:
+            batch_x, batch_layers, batch_y = batch_x.to(device), batch_layers.to(device), batch_y.to(device)
+            
+            p_mean, p_std = model(batch_x, batch_layers)
+            v_loss = vector_distance_loss(p_mean, p_std, batch_y[:, 0:1], batch_y[:, 1:2])
+            val_loss += v_loss.item()
+            
+            all_preds_mean.append(p_mean)
+            all_targets_mean.append(batch_y[:, 0:1])
+            all_preds_std.append(p_std)
+            all_targets_std.append(batch_y[:, 1:2])
+
+    avg_val = val_loss / len(test_loader)
+    # use avg_dist as final result
+    all_preds_mean = torch.cat(all_preds_mean, dim=0)
+    all_targets_mean = torch.cat(all_targets_mean, dim=0)
+
+    all_preds_std = torch.cat(all_preds_std, dim=0)
+    all_targets_std = torch.cat(all_targets_std, dim=0)
+
+    avg_dist_mu, avg_dist_std = \
+        avg_norm_dist(all_preds_mean, all_preds_std, all_targets_mean, all_targets_std)
+
+    print(f"test results: avg mu dist: {avg_dist_mu:.4f}, avg std dist: {avg_dist_std:.4f}")
+    res_df = pd.DataFrame({
+        "val_l2_dist": [avg_val],
+        "avg_mu_err": [avg_dist_mu],
+        "avg_std_err": [avg_dist_std],    
+    })
+    res_df.to_csv(result_path, index=False)
+    
 
 def main():
     parser = argparse.ArgumentParser(description="Train Recovery MLP")
@@ -305,20 +382,34 @@ def main():
     model_path = Path(args.model_path)
     hidden_dim=16
     
-    attn_ins, attn_outs, layer_ids, n_layers = \
-        load_training_data(data_base_path, args.model_name, layer_id=2)
-    train_loader, test_loader = \
-        prepare_recovery_dataloaders(attn_ins, layer_ids, attn_outs)
+    print(f"loading model files...")
+    loaded_raw_data = \
+        load_training_data(data_base_path, args.model_name)
 
-    # model = RecoveryMLP(num_layers=n_layers, hidden_dim=hidden_dim).cuda()
-    model = RecoveryDualMLP(num_layers=n_layers, hidden_dim=hidden_dim).cuda()
+    # disassemble data for data loader preparation
+    n_layers = loaded_raw_data["n_layers"]
+    attn_ins, attn_outs, layer_ids = loaded_raw_data["train"]
+    attn_ins_test, attn_outs_test, layer_ids_test = loaded_raw_data["test"]
+
+    train_loader, validate_loader = \
+        prepare_recovery_dataloaders(attn_ins, layer_ids, attn_outs)
+    _, test_loader = \
+        prepare_recovery_dataloaders(attn_ins_test, layer_ids_test, attn_outs_test, train_ratio=0.0)
+
+    # start training
+    model = RecoveryMLP(num_layers=n_layers, hidden_dim=hidden_dim).cuda()
+    # model = RecoverySharedTrunkMLP(num_layers=n_layers, hidden_dim=hidden_dim).cuda()
+    # model = RecoveryDualMLP(num_layers=n_layers, hidden_dim=hidden_dim).cuda()
 
     model_path.mkdir(parents=True, exist_ok=True)
-    save_path = model_path / f"{args.model_name}_recovery_dual_mlp_{hidden_dim}.pt"
+    save_path = model_path / f"{args.model_name}_recovery_mlp_{hidden_dim}.pt"
     trained_model = \
-        train_recovery_mlp(model, train_loader, test_loader, model_save_path=save_path, patience=10)
-
+        train_recovery_mlp(model, train_loader, validate_loader, model_save_path=save_path, patience=10)
     print(f"Model saved to {save_path}")
+
+    # start testing
+    test_res_path = model_path / f"{args.model_name}_recovery_mlp_{hidden_dim}_test_log.csv"
+    test_recovery_mlp(trained_model, test_loader, result_path=test_res_path)
 
 if __name__ == "__main__":
     main()
