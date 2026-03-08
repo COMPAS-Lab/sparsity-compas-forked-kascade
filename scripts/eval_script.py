@@ -132,14 +132,14 @@ def main():
         
         offline_attn_out_mean = {}
         offline_attn_out_std = {}
-        offline_attn_in_mean = {}
-        offline_attn_in_std = {}
+        offline_attn_in = {}
         profile_hook_handlers = []
         if strategy_name == "baseline_profile": 
             profile_hook_handlers = get_attn_out_stat_profile(
                                         model, 
-                                        offline_attn_in_mean, offline_attn_in_std, 
-                                        offline_attn_out_mean, offline_attn_out_std)
+                                        extracted_attn_in = offline_attn_in, 
+                                        extracted_attn_out_mean = offline_attn_out_mean, 
+                                        extracted_attn_out_std = offline_attn_out_std)
         else:
             if "_recovery" in strategy_name:
                 # load recovery model
@@ -232,8 +232,7 @@ def main():
                 if not offline_profile_fp.exists():
                     offline_profile_fp.mkdir(parents=True)
                 formatted_model_name = args.model_name.split("/")[-1]
-                np.save(offline_profile_fp/f"{formatted_model_name}_input_mean.npy", offline_attn_in_mean, allow_pickle=True)
-                np.save(offline_profile_fp/f"{formatted_model_name}_input_std.npy", offline_attn_in_std, allow_pickle=True)
+                np.save(offline_profile_fp/f"{formatted_model_name}_input.npy", offline_attn_in, allow_pickle=True)
                 np.save(offline_profile_fp/f"{formatted_model_name}_output_mean.npy", offline_attn_out_mean, allow_pickle=True)
                 np.save(offline_profile_fp/f"{formatted_model_name}_output_std.npy", offline_attn_out_std, allow_pickle=True)
 

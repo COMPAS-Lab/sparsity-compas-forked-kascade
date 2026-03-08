@@ -1,27 +1,35 @@
 import torch
 import torch.nn as nn
 from typing import Optional
-
-import torch
-import torch.nn as nn
+from collections import OrderedDict
 
 class RecoveryMLP(nn.Module):
-    def __init__(self, hidden_dim=16):
+    def __init__(self, hidden_size=4096, mlp_dim=128):
         super().__init__()
+        self.model_name = f"recovery_mlp_{mlp_dim}"
         
-        # Input: [mean(X), std(X)] = 2 features
-        self.mlp = nn.Sequential(
-            nn.Linear(2, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, 2) # Outputs: [target_mean, target_std]
-        )
+        # A single, pure sequential pipeline
+        self.network = nn.Sequential(OrderedDict([
+            ('input_proj', nn.Linear(hidden_size, mlp_dim)),
+            ('act1', nn.GELU()),
+            ('dropout1', nn.Dropout(0.1)),
+            ('hidden_layer', nn.Linear(mlp_dim, mlp_dim // 2)),
+            ('act2', nn.GELU()),
+            # The final layer outputs 2 values: [mean, std_pre_softplus]
+            ('output_layer', nn.Linear(mlp_dim // 2, 2))
+        ]))
 
-    def forward(self, x_stats):
-        # x_stats: [batch * seq, 2]
+    def forward(self, x):
+        # x: [batch_size, 4096]
         
-        out = self.mlp(x_stats)
-        # Apply Softplus to the predicted Std (second column)
-        target_mean = out[:, 0:1]
-        target_std = torch.nn.functional.softplus(out[:, 1:2])
+        # Raw predictions for both stats
+        raw_output = self.network(x) # [batch_size, 2]
         
-        return target_mean, target_std
+        # Split the outputs
+        pred_mean = raw_output[:, 0:1]
+        
+        # We still need to ensure standard deviation is positive.
+        # Even in a sequential model, we apply Softplus to the second channel.
+        pred_std = torch.nn.functional.softplus(raw_output[:, 1:2])
+        
+        return pred_mean, pred_std

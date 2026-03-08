@@ -11,18 +11,18 @@ import pandas as pd
 
 def load_training_data(base_path: Path, model_name: str):
     # load training files
-    input_mean_path = base_path / f"{model_name}_input_mean.npy"
-    input_std_path = base_path / f"{model_name}_input_std.npy"
+    input_path = base_path / f"{model_name}_input.npy"
     output_mean_path = base_path / f"{model_name}_output_mean.npy"
     output_std_path = base_path / f"{model_name}_output_std.npy"
-    input_mean = np.load(input_mean_path, allow_pickle=True).item()
-    input_std = np.load(input_std_path, allow_pickle=True).item()
+    input_hstates = np.load(input_path, allow_pickle=True).item()
     output_mean = np.load(output_mean_path, allow_pickle=True).item()
     output_std = np.load(output_std_path, allow_pickle=True).item()
 
-    n_layers = list(input_mean.keys())
+    n_layers = list(input_hstates.keys())
     # n_layers has the format "layer_<layer number>"
     print(f"detect {len(n_layers)} layers from model {model_name}")
+    hidden_dim = input_hstates[n_layers[0]][0].shape[-1]
+    print(f"detect hidden dimension: {hidden_dim}")
 
     attn_ins_data, attn_outs_data = {}, {}
     attn_ins_test, attn_outs_test = {}, {}
@@ -33,22 +33,17 @@ def load_training_data(base_path: Path, model_name: str):
         # find the last elements in input_mean[l] that has shape[0] > 1, that
         # is the start of the last instances. 
         # Use it as test set
-        inst_dim_0 = np.array([iter_dat.shape[0] for iter_dat in input_mean[l]])
+        inst_dim_0 = np.array([iter_dat.shape[0] for iter_dat in input_hstates[l]])
         last_inst_start_id = np.where(inst_dim_0 > 1)[0][-1]
 
-        curr_input_mean_test = np.concatenate(input_mean[l][last_inst_start_id:], axis=0)
-        curr_input_std_test = np.concatenate(input_std[l][last_inst_start_id:], axis=0)
+        curr_attn_ins_test = np.concatenate(input_hstates[l][last_inst_start_id:], axis=0)
+        curr_attn_ins = np.concatenate(input_hstates[l][:last_inst_start_id], axis=0)
+
         curr_output_mean_test = np.concatenate(output_mean[l][last_inst_start_id:], axis=0)
         curr_output_std_test = np.concatenate(output_std[l][last_inst_start_id:], axis=0)
-
-        curr_input_mean = np.concatenate(input_mean[l][:last_inst_start_id], axis=0)
-        curr_input_std = np.concatenate(input_std[l][:last_inst_start_id], axis=0)
         curr_output_mean = np.concatenate(output_mean[l][:last_inst_start_id], axis=0)
         curr_output_std = np.concatenate(output_std[l][:last_inst_start_id], axis=0)
-
-        curr_attn_ins_test = np.concatenate([curr_input_mean_test, curr_input_std_test], axis=-1)
         curr_attn_outs_test = np.concatenate([curr_output_mean_test, curr_output_std_test], axis=-1)
-        curr_attn_ins = np.concatenate([curr_input_mean, curr_input_std], axis=-1)
         curr_attn_outs = np.concatenate([curr_output_mean, curr_output_std], axis=-1)
 
         # check dimensions
@@ -64,21 +59,21 @@ def load_training_data(base_path: Path, model_name: str):
         print(f"train+validation set at {l}: attn ins size: {attn_ins_data[l].size()}, attn outs size: {attn_outs_data[l].size()}")
         print(f"test set at {l}: attn ins size: {attn_ins_test[l].size()}, attn outs size: {attn_outs_test[l].size()}")
         
-        del input_mean[l]
-        del input_std[l]
+        del input_hstates[l]
         del output_mean[l]
         del output_std[l]
 
     ret = {
         "train": (attn_ins_data, attn_outs_data),
         "test": (attn_ins_test, attn_outs_test), 
-        "n_layers": n_layers
+        "n_layers": n_layers,
+        "hidden_dim": hidden_dim
     }
 
     return ret
 
 def prepare_recovery_dataloaders(attn_ins, expected_outputs, 
-                                    batch_size=1024, train_ratio=0.9, seed=42):
+                                    batch_size=256, train_ratio=0.9, seed=42):
     """
     Transforms raw tensors into Train and Test DataLoaders.
     
@@ -98,6 +93,7 @@ def prepare_recovery_dataloaders(attn_ins, expected_outputs,
 
     # 3. Calculate split lengths
     total_size = len(full_dataset)
+    print(f"data loader: total size: {total_size}, train ratio: {train_ratio}, batch size: {batch_size}")
     train_size = int(train_ratio * total_size)
     test_size = total_size - train_size
 
@@ -167,8 +163,8 @@ def vector_distance_loss(pred_mean, pred_std, target_mean, target_std):
     # Use torch.sqrt(sum_of_squares)
     diff_sq = (target_mean - pred_mean)**2 + (target_std - pred_std)**2
     
-    # We add 1e-8 for numerical stability of the sqrt gradient
-    dist = torch.sqrt(diff_sq + 1e-8)
+    # We add 1e-9 for numerical stability of the sqrt gradient
+    dist = torch.sqrt(diff_sq + 1e-9)
     
     return torch.mean(dist)
     
@@ -353,7 +349,8 @@ def main():
 
     data_base_path = Path(args.data_base_path)
     model_path = Path(args.model_path)
-    hidden_dim=16
+    mlp_dim=128
+    batch_size=1024
     
     print(f"loading model files...")
     loaded_raw_data = \
@@ -361,6 +358,7 @@ def main():
 
     # disassemble data for data loader preparation
     n_layers = loaded_raw_data["n_layers"]
+    hidden_dim = loaded_raw_data["hidden_dim"]
     attn_ins, attn_outs = loaded_raw_data["train"]
     attn_ins_test, attn_outs_test = loaded_raw_data["test"]
 
@@ -368,21 +366,21 @@ def main():
     for l in n_layers:
         print(f"training {l}...")
         train_loader, validate_loader = \
-            prepare_recovery_dataloaders(attn_ins[l], attn_outs[l])
+            prepare_recovery_dataloaders(attn_ins[l], attn_outs[l], batch_size=batch_size)
         _, test_loader = \
-            prepare_recovery_dataloaders(attn_ins_test[l], attn_outs_test[l], train_ratio=0.0)
+            prepare_recovery_dataloaders(attn_ins_test[l], attn_outs_test[l], train_ratio=0.0, batch_size=batch_size)
 
         # start training
-        model = RecoveryMLP(hidden_dim=hidden_dim).cuda()
+        model = RecoveryMLP(hidden_size=hidden_dim, mlp_dim=mlp_dim).cuda()
 
         model_path.mkdir(parents=True, exist_ok=True)
-        save_path = model_path / f"{args.model_name}_recovery_mlp_{hidden_dim}_{l}.pt"
+        save_path = model_path / f"{args.model_name}_recovery_mlp_{mlp_dim}_{l}.pt"
         trained_model = \
             train_recovery_mlp(model, train_loader, validate_loader, model_save_path=save_path, patience=10)
         print(f"Model saved to {save_path}")
 
         # start testing
-        test_res_path = model_path / f"{args.model_name}_recovery_mlp_{hidden_dim}_{l}_test_log.csv"
+        test_res_path = model_path / f"{args.model_name}_recovery_mlp_{mlp_dim}_{l}_test_log.csv"
         test_recovery_mlp(trained_model, test_loader, result_path=test_res_path)
 
 if __name__ == "__main__":

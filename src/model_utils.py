@@ -4,6 +4,7 @@
 from transformers import AutoTokenizer, AutoModelForCausalLM, PreTrainedModel
 import torch
 import re
+from random import sample
 
 def get_tokenizer_and_model(model_name, attn_implementation, device):
     tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -43,7 +44,7 @@ def get_tokenizer_and_model(model_name, attn_implementation, device):
     return model, tokenizer
 
 def get_attn_out_stat_profile(model, 
-                                extracted_attn_in_mean = {}, extracted_attn_in_std = {},
+                                extracted_attn_in = {}, attn_in_sample_size = 1000,
                                 extracted_attn_out_mean = {}, extracted_attn_out_std = {}):
     def get_activation_hook(layer_name):
         def hook(module, input, kwargs, output):
@@ -65,12 +66,18 @@ def get_attn_out_stat_profile(model,
 
             # expected input dim: (batch * seqlen, hidden_size)
             # expected output dim: (batch * seqlen, 1)
-            curr_in_mean, curr_in_std = \
-                curr_in.mean(dim=-1, keepdims=True).detach().cpu().numpy().astype(float), \
-                curr_in.std(dim=-1, keepdims=True).detach().cpu().numpy().astype(float)
-            extracted_attn_in_mean[layer_name] = extracted_attn_in_mean.get(layer_name, []) + [curr_in_mean]
-            extracted_attn_in_std[layer_name] = extracted_attn_in_std.get(layer_name, []) + [curr_in_std]
             
+            # generate a set of random indices within range of len(curr_in), to be 
+            # used to sample both curr_in and curr_out
+            if curr_in.shape[0] > attn_in_sample_size:
+                sel_idces = sample(range(curr_in.shape[0]), attn_in_sample_size)
+            else:
+                sel_idces = range(curr_in.shape[0])
+
+            curr_in = curr_in[sel_idces].detach().cpu().numpy().astype(float)
+            extracted_attn_in[layer_name] = extracted_attn_in.get(layer_name, []) + [curr_in]
+            
+            curr_out = curr_out[sel_idces]
             curr_out_mean, curr_out_std = \
                 curr_out.mean(dim=-1, keepdims=True).detach().cpu().numpy().astype(float), \
                 curr_out.std(dim=-1, keepdims=True).detach().cpu().numpy().astype(float)
