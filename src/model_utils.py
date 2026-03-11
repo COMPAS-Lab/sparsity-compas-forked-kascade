@@ -2,8 +2,10 @@
 # Licensed under the MIT License.
 
 from transformers import AutoTokenizer, AutoModelForCausalLM, PreTrainedModel
+from kascade.attn_recovery import RecoveryMLP
 import torch
 import re
+from pathlib import Path
 from random import sample
 
 def get_tokenizer_and_model(model_name, attn_implementation, device):
@@ -42,6 +44,7 @@ def get_tokenizer_and_model(model_name, attn_implementation, device):
         model = model.to(device)
 
     return model, tokenizer
+
 
 def get_attn_out_stat_profile(model, 
                                 extracted_attn_in = {}, attn_in_sample_size = 1000,
@@ -97,6 +100,77 @@ def get_attn_out_stat_profile(model,
             ))
     
     return handles
+
+
+def apply_mlp_recovery(model, mlp_model_path: Path):
+    """
+    Patches an existing Llama model with the Recovery MLP.
+    
+    Args:
+        model: The loaded HuggingFace LlamaForCausalLM instance.
+        mlp_model_path: Path to your best_dual_oracle_dist.pt file.
+    """
+    hidden_size = model.config.hidden_size
+    num_layers = model.config.num_hidden_layers
+    model_name = model.name_or_path.split("/")[-1]
+    
+    # Initialize and load MLP
+    mlp_recovery_models = []
+    print("Loading RecoveryMLP model params")
+    for l in range(num_layers):
+        mlp_recovery_models.append(RecoveryMLP(
+            hidden_size=hidden_size,
+            mlp_dim=128
+        ))
+    
+        mlp_weight_path = mlp_model_path / f"{model_name}_recovery_mlp_128_layer_{l}.pt"
+        if not mlp_weight_path.exists():
+            raise FileNotFoundError(f"MLP weights not found at {mlp_weight_path}")
+        
+        # In multi-GPU pipeline parallelism, each layer can be on a different device.
+        # We must place the MLP on the exact same device as the layer.
+        layer_device = model.model.layers[l].self_attn.q_proj.weight.device
+        
+        state_dict = torch.load(mlp_weight_path, map_location=layer_device, weights_only=True)
+        mlp_recovery_models[l].load_state_dict(state_dict)
+        mlp_recovery_models[l].to(layer_device)
+        mlp_recovery_models[l].eval()
+
+    def make_recovery_hook(mlp_recovery_model):
+        def recovery_hook(module, args, kwargs, output):
+            attn_output = output[0]
+            original_shape = attn_output.shape
+
+            # The MLP was trained on hidden_states as input, not attn_output
+            curr_in = kwargs.get("hidden_states", None)
+            if curr_in is None and len(args) > 0:
+                curr_in = args[0]
+            x_flat = curr_in.view(-1, curr_in.shape[-1]).to(torch.float32)
+
+            with torch.no_grad():
+                pred_mu, pred_std = mlp_recovery_model(x_flat)
+                pred_mu = pred_mu.view(*original_shape[:2], 1).to(attn_output.dtype)
+                pred_std = pred_std.view(*original_shape[:2], 1).to(attn_output.dtype)
+                eps = 1e-8
+                curr_mu = attn_output.mean(dim=-1, keepdim=True)
+                curr_std = attn_output.std(dim=-1, keepdim=True)
+                attn_output.sub_(curr_mu).div_(curr_std + eps).mul_(pred_std).add_(pred_mu)
+            return (attn_output,) + output[1:]
+        return recovery_hook
+    
+    handlers = []
+
+    if "llama" in model_name.lower() or "qwen3" in model_name.lower():
+        print(f"applying mlp recovery")
+        for l in range(num_layers):
+            # skip layer 0 since it's not pruned.
+            if l == 0:
+                continue
+            handlers.append(model.model.layers[l].self_attn.register_forward_hook(
+                make_recovery_hook(mlp_recovery_models[l]), with_kwargs=True
+            ))
+    
+    return handlers
     
     
 def get_inst_tokens(model_name, use_sys_token = False, enable_thinking = False):

@@ -3,33 +3,40 @@ import torch.nn as nn
 from typing import Optional
 from collections import OrderedDict
 
+def preprocess_means(data, eps=1e-9):
+    """
+    pre-processing for distribution means spanning 10^-2 to 10^-5.
+    """
+    # Capture the sign (polarity)
+    sign = torch.sign(data)
+    # Apply log10 to the absolute magnitude
+    # We add eps to ensure the log is defined even for 0.0 values
+    log_magnitude = torch.log10(torch.abs(data) + eps)
+    return sign * log_magnitude
+
+def post_process_means(data, eps=1e-9):
+    """
+    post-processing for distribution means spanning 10^-2 to 10^-5.
+    """
+    # Capture the sign (polarity)
+    sign = torch.sign(data)
+    linear_magnitude = torch.pow(10, torch.abs(data))
+    return sign * linear_magnitude
+
 class RecoveryMLP(nn.Module):
-    def __init__(self, hidden_size=4096, mlp_dim=128):
+    def __init__(self, name: str, hidden_size=4096, mlp_dim=128):
         super().__init__()
-        self.model_name = f"recovery_mlp_{mlp_dim}"
+        self.model_name = name
         
         # A single, pure sequential pipeline
         self.network = nn.Sequential(OrderedDict([
             ('input_proj', nn.Linear(hidden_size, mlp_dim)),
             ('act1', nn.GELU()),
-            ('dropout1', nn.Dropout(0.1)),
-            ('hidden_layer', nn.Linear(mlp_dim, mlp_dim // 2)),
-            ('act2', nn.GELU()),
-            # The final layer outputs 2 values: [mean, std_pre_softplus]
-            ('output_layer', nn.Linear(mlp_dim // 2, 2))
+            ('dropout1', nn.Dropout(0.05)),
+            # The final layer output 1 value: either mean or std
+            ('hidden_layer', nn.Linear(mlp_dim, 1))
         ]))
 
     def forward(self, x):
         # x: [batch_size, 4096]
-        
-        # Raw predictions for both stats
-        raw_output = self.network(x) # [batch_size, 2]
-        
-        # Split the outputs
-        pred_mean = raw_output[:, 0:1]
-        
-        # We still need to ensure standard deviation is positive.
-        # Even in a sequential model, we apply Softplus to the second channel.
-        pred_std = torch.nn.functional.softplus(raw_output[:, 1:2])
-        
-        return pred_mean, pred_std
+        return self.network(x)

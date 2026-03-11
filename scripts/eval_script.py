@@ -4,13 +4,18 @@
 import argparse
 from pathlib import Path
 from accelerate import Accelerator
-from kascade.model_utils import get_tokenizer_and_model, get_inst_tokens, get_eos_token_ids, get_attn_out_stat_profile
+from kascade.model_utils import (
+    get_tokenizer_and_model, 
+    get_inst_tokens, 
+    get_eos_token_ids, 
+    get_attn_out_stat_profile, 
+    apply_mlp_recovery
+)
 from kascade.dataset2config import *
 from kascade.strategies import *
 from accelerate.utils import InitProcessGroupKwargs
 from datetime import timedelta
 from kascade.runners import MetricsRunner, StatsRunner, RunConfig
-from kascade.attn_recovery import RecoveryMLP
 from datasets import load_dataset
 from transformers import set_seed
 from transformers.utils import is_flash_attn_2_available, is_flash_attn_3_available
@@ -33,9 +38,11 @@ def main():
         "post_softmax_pooled_prefill_topk",
         "post_softmax_all_heads_pooled_prefill_topk",
         "kascade",
+        "kascade_recovery",
         "pooled_kascade",
         "decode_only_kascade",
         "efficient_kascade",
+        "efficient_kascade_recovery",
         "no_remap_kascade",
         "quest",
         "omni_kv",
@@ -75,6 +82,7 @@ def main():
     parser.add_argument("--debug", action="store_true", help="Raise generation errors instead of skipping them")
     parser.add_argument("--store_results", action="store_true", help="Store results")
     parser.add_argument("--use_precomputed_stats", action="store_true", help="Use precomputed statistics")
+    parser.add_argument("--mlp_recovery_model_path", type=str, default=None, help="Path to the RecoveryMLP weights model")
     args = parser.parse_args()
 
     accelerator = Accelerator(mixed_precision="no", kwargs_handlers=[InitProcessGroupKwargs(timeout=timedelta(seconds=7200))])
@@ -124,28 +132,32 @@ def main():
             "quest": lambda: QuestStrategy(tile_size=args.tile_size_q, k=args.topk),
             "omni_kv": lambda: OmniKVStrategy(k=args.topk, recompute_layers=args.recompute_layers_o),
             "less_is_more": lambda: LessIsMoreStrategy(k=args.topk, recompute_layers=args.recompute_layers_l, lim_ratio_factor=args.lim_ratio_factor, num_sink_tokens=args.num_sink_tokens),
+            # additional mlp recovery strategy
+            "kascade_recovery": lambda: KascadeRecoveryStrategy(recompute_layers=args.recompute_layers, model_name=args.model_name, k=args.topk, tile_size=args.tile_size, rolling_prefill=args.rolling_prefill),
+            "efficient_kascade_recovery": lambda: EfficientKascadeRecoveryStrategy(recompute_layers=args.recompute_layers, model_name=args.model_name, k=args.topk, tile_size=args.tile_size, rolling_prefill=args.rolling_prefill),
         }
-        
+
         strategy: Strategy = strategy2class[strategy_name]()
         if strategy_name != "baseline" and strategy_name != "baseline_profile":
             model.config._attn_implementation = strategy.name
         
         offline_attn_out_mean = {}
         offline_attn_out_std = {}
-        offline_attn_in = {}
-        profile_hook_handlers = []
+        forward_attn_in = {}
+        forward_hook_handlers = []
         if strategy_name == "baseline_profile": 
-            profile_hook_handlers = get_attn_out_stat_profile(
+            forward_hook_handlers = get_attn_out_stat_profile(
                                         model, 
                                         extracted_attn_in = offline_attn_in, 
                                         extracted_attn_out_mean = offline_attn_out_mean, 
                                         extracted_attn_out_std = offline_attn_out_std)
         else:
             if "_recovery" in strategy_name:
-                # load recovery model
-                pass
+                mlp_model_path = Path(args.mlp_recovery_model_path)
+                if not mlp_model_path.exists():
+                    raise FileNotFoundError(f"MLP model weights not found at {mlp_model_path}")
+                forward_hook_handlers = apply_mlp_recovery(model, mlp_model_path)
             
-
         for subset in subsets_to_run:
             # Determine dataset key for config lookups
             if subset is not None:
@@ -224,8 +236,8 @@ def main():
             runner.run()
 
         if strategy_name == "baseline_profile":
-            for handle in profile_hook_handlers:
-                handle.remove()
+            for handler in forward_hook_handlers:
+                handler.remove()
                 
             if args.store_results:
                 offline_profile_fp = Path(f"./results/attn_recovery/train")
@@ -235,6 +247,11 @@ def main():
                 np.save(offline_profile_fp/f"{formatted_model_name}_input.npy", offline_attn_in, allow_pickle=True)
                 np.save(offline_profile_fp/f"{formatted_model_name}_output_mean.npy", offline_attn_out_mean, allow_pickle=True)
                 np.save(offline_profile_fp/f"{formatted_model_name}_output_std.npy", offline_attn_out_std, allow_pickle=True)
+
+        if "_recovery" in strategy_name:
+            for handler in forward_hook_handlers:
+                handler.remove()
+
 
     accelerator.end_training()
 
