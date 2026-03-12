@@ -1,4 +1,4 @@
-from kascade.attn_recovery import RecoveryMLP
+from kascade.attn_recovery import RecoveryMLP, preprocess_means, post_process_means
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset, random_split
@@ -8,6 +8,9 @@ import numpy as np
 import argparse
 from tqdm import tqdm
 import pandas as pd
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 def load_training_data(base_path: Path, model_name: str):
     # load training files
@@ -24,8 +27,10 @@ def load_training_data(base_path: Path, model_name: str):
     # n_layers has the format "layer_<layer number>"
     print(f"detect {len(n_layers)} layers from model {model_name}")
 
-    attn_ins_data, attn_outs_data = {}, {}
-    attn_ins_test, attn_outs_test = {}, {}
+    attn_ins_data_mean, attn_outs_data_delta_mean = {}, {}
+    attn_ins_data_std, attn_outs_data_std = {}, {}
+    attn_ins_test_mean, attn_outs_test_delta_mean = {}, {}
+    attn_ins_test_std, attn_outs_test_std = {}, {}
 
     for l in n_layers:
         # each layer contains many iterations, prefill and decode iters 
@@ -38,44 +43,50 @@ def load_training_data(base_path: Path, model_name: str):
 
         curr_input_mean_test = np.concatenate(input_mean[l][last_inst_start_id:], axis=0)
         curr_input_std_test = np.concatenate(input_std[l][last_inst_start_id:], axis=0)
-        curr_output_mean_test = np.concatenate(output_mean[l][last_inst_start_id:], axis=0)
+        curr_output_delta_mean_test = np.concatenate(output_mean[l][last_inst_start_id:], axis=0) - curr_input_mean_test
         curr_output_std_test = np.concatenate(output_std[l][last_inst_start_id:], axis=0)
 
         curr_input_mean = np.concatenate(input_mean[l][:last_inst_start_id], axis=0)
         curr_input_std = np.concatenate(input_std[l][:last_inst_start_id], axis=0)
-        curr_output_mean = np.concatenate(output_mean[l][:last_inst_start_id], axis=0)
+        curr_output_delta_mean = np.concatenate(output_mean[l][:last_inst_start_id], axis=0) - curr_input_mean
         curr_output_std = np.concatenate(output_std[l][:last_inst_start_id], axis=0)
 
-        curr_attn_ins_test = np.concatenate([curr_input_mean_test, curr_input_std_test], axis=-1)
-        curr_attn_outs_test = np.concatenate([curr_output_mean_test, curr_output_std_test], axis=-1)
-        curr_attn_ins = np.concatenate([curr_input_mean, curr_input_std], axis=-1)
-        curr_attn_outs = np.concatenate([curr_output_mean, curr_output_std], axis=-1)
-
         # check dimensions
-        assert(len(curr_attn_ins) == len(curr_attn_outs))
-        assert(len(curr_attn_ins_test) == len(curr_attn_outs_test))
+        assert(len(curr_input_mean) == len(curr_output_delta_mean))
+        assert(len(curr_input_mean_test) == len(curr_output_delta_mean_test))
 
         # attach curr iter data
-        attn_ins_test[l] = torch.tensor(curr_attn_ins_test, dtype=float)
-        attn_outs_test[l] = torch.tensor(curr_attn_outs_test, dtype=float)
-        attn_ins_data[l] = torch.tensor(curr_attn_ins, dtype=float)
-        attn_outs_data[l] = torch.tensor(curr_attn_outs, dtype=float)
+        attn_ins_test_mean[l] = torch.tensor(curr_input_mean_test, dtype=float)
+        attn_outs_test_delta_mean[l] = torch.tensor(curr_output_delta_mean_test, dtype=float)
+        attn_ins_test_std[l] = torch.tensor(curr_input_std_test, dtype=float)
+        attn_outs_test_std[l] = torch.tensor(curr_output_std_test, dtype=float)
 
-        print(f"train+validation set at {l}: attn ins size: {attn_ins_data[l].size()}, attn outs size: {attn_outs_data[l].size()}")
-        print(f"test set at {l}: attn ins size: {attn_ins_test[l].size()}, attn outs size: {attn_outs_test[l].size()}")
+        attn_ins_data_mean[l] = torch.tensor(curr_input_mean, dtype=float)
+        attn_outs_data_delta_mean[l] = torch.tensor(curr_output_delta_mean, dtype=float)
+        attn_ins_data_std[l] = torch.tensor(curr_input_std, dtype=float)
+        attn_outs_data_std[l] = torch.tensor(curr_output_std, dtype=float)
+        
+        print(f"train+validation set at {l}: attn ins mean size: {attn_ins_data_mean[l].size()}, attn outs mean size: {attn_outs_data_delta_mean[l].size()}, attn outs std size: {attn_outs_data_std[l].size()}")
+        print(f"test set at {l}: attn ins mean size: {attn_ins_test_mean[l].size()}, attn outs mean size: {attn_outs_test_delta_mean[l].size()}, attn outs std size: {attn_outs_test_std[l].size()}")
         
         del input_mean[l]
         del input_std[l]
         del output_mean[l]
         del output_std[l]
 
-    ret = {
-        "train": (attn_ins_data, attn_outs_data),
-        "test": (attn_ins_test, attn_outs_test), 
-        "n_layers": n_layers
+    ret_mean = {
+        "train": (attn_ins_data_mean, attn_outs_data_delta_mean),
+        "test": (attn_ins_test_mean, attn_outs_test_delta_mean), 
+        "n_layers": n_layers,
     }
 
-    return ret
+    ret_std = {
+        "train": (attn_ins_data_std, attn_outs_data_std),
+        "test": (attn_ins_test_std, attn_outs_test_std), 
+        "n_layers": n_layers,
+    }
+
+    return ret_mean, ret_std
 
 def prepare_recovery_dataloaders(attn_ins, expected_outputs, 
                                     batch_size=1024, train_ratio=0.9, seed=42):
@@ -344,6 +355,50 @@ def test_recovery_mlp(
     res_df.to_csv(result_path, index=False)
     
 
+def plot_layer_io_means(attn_ins_mean, attn_outs_delta_mean, n_layers, save_path=None):
+    """
+    Scatter plot: for each layer, plots all N samples with attn_ins_mean[:,0]
+    on the x-axis and attn_outs_delta_mean[:,0] on the y-axis.
+    Each layer gets a distinct color from the viridis colormap.
+
+    Args:
+        attn_ins_mean: dict[layer_name -> Tensor[N, 1]]
+        attn_outs_delta_mean: dict[layer_name -> Tensor[N, 1]]
+        n_layers: ordered list of layer name strings (e.g. ["layer_0", ...])
+        save_path: if given, save the figure there; otherwise show interactively.
+    """
+    cmap = plt.get_cmap("viridis", len(n_layers))
+    fig, ax = plt.subplots(figsize=(10, 7))
+
+    for i, l in enumerate(n_layers):
+        # sample 1000 points from attn_ins_mean[l] and attn_outs_delta_mean[l]
+        sample_idx = np.random.choice(len(attn_ins_mean[l]), 1000, replace=False)
+        x = attn_ins_mean[l][sample_idx].float().squeeze(-1).numpy()       # [N]
+        y = preprocess_means(attn_outs_delta_mean[l][sample_idx]).float().squeeze(-1).numpy() # [N]
+        layer_idx = l.replace("layer_", "")
+        ax.scatter(x, y, c=[cmap(i)], s=10, alpha=0.4,
+                   label=f"layer {layer_idx}", zorder=2)
+
+    # Colorbar as a layer-index guide
+    sm = plt.cm.ScalarMappable(cmap="viridis",
+                                norm=plt.Normalize(vmin=0, vmax=len(n_layers) - 1))
+    sm.set_array([])
+    plt.colorbar(sm, ax=ax, label="Layer index")
+
+    ax.set_xlabel("attn_ins_mean")
+    ax.set_ylabel("attn_outs_delta_mean")
+    ax.set_title("attn_ins_mean vs. attn_outs_delta_mean per layer")
+    ax.grid(True, linestyle="--", alpha=0.4)
+    plt.tight_layout()
+
+    if save_path is not None:
+        plt.savefig(save_path, dpi=150)
+        print(f"[plot_layer_io_means] saved to {save_path}")
+    else:
+        plt.show()
+    plt.close(fig)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Train Recovery MLP")
     parser.add_argument("--model_name", type=str, required=True, help="Model name")
@@ -356,13 +411,24 @@ def main():
     hidden_dim=16
     
     print(f"loading model files...")
-    loaded_raw_data = \
+    loaded_raw_data_mean, loaded_raw_data_std = \
         load_training_data(data_base_path, args.model_name)
 
     # disassemble data for data loader preparation
-    n_layers = loaded_raw_data["n_layers"]
-    attn_ins, attn_outs = loaded_raw_data["train"]
-    attn_ins_test, attn_outs_test = loaded_raw_data["test"]
+    n_layers = loaded_raw_data_mean["n_layers"]
+    attn_ins_mean, attn_outs_delta_mean = loaded_raw_data_mean["train"]
+    attn_ins_test_mean, attn_outs_test_delta_mean = loaded_raw_data_mean["test"]
+
+    attn_ins_std, attn_outs_std = loaded_raw_data_std["train"]
+    attn_ins_test_std, attn_outs_test_std = loaded_raw_data_std["test"]
+
+
+    for i in range(len(n_layers)):
+        plot_save_path = Path("results") / f"{args.model_name}_layer_io_means_{i}.png"
+        plot_layer_io_means(attn_ins_mean, attn_outs_delta_mean, [n_layers[i]],
+                            save_path=plot_save_path)
+
+    exit()
 
     # train each mlp for each layer, save them separately
     for l in n_layers:
