@@ -14,8 +14,8 @@ from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
 from transformers.masking_utils import ALL_MASK_ATTENTION_FUNCTIONS
 
 class EfficientKascadeStrategy(KascadeStrategy):
-    def __init__(self, recompute_layers: List[int], model_name: str, k=1, tile_size=1, rolling_prefill=False, block_size=12288):
-        super().__init__(name="efficient_kascade", recompute_layers=recompute_layers, model_name=model_name, k=k, tile_size=tile_size, rolling_prefill=rolling_prefill, block_size=block_size)
+    def __init__(self, recompute_layers: List[int], model_name: str, name="efficient_kascade", k=1, tile_size=1, rolling_prefill=False, block_size=12288):
+        super().__init__(name=name, recompute_layers=recompute_layers, model_name=model_name, k=k, tile_size=tile_size, rolling_prefill=rolling_prefill, block_size=block_size)
         self._heads = 32
         self._dim = 128
         self._groups = 8
@@ -166,3 +166,9 @@ class EfficientKascadeStrategy(KascadeStrategy):
         )
         ALL_MASK_ATTENTION_FUNCTIONS.register(self.name, ALL_MASK_ATTENTION_FUNCTIONS["sdpa"])
         ALL_ATTENTION_FUNCTIONS.register(self.name, _attention_forward)
+
+
+# add a efficient_kascade_recovery_strategy, it's the same as efficient_kascade but just with a different name
+class EfficientKascadeRecoveryStrategy(EfficientKascadeStrategy):
+    def __init__(self, recompute_layers: List[int], model_name: str, name="efficient_kascade_recovery",  k=1, tile_size=1, rolling_prefill=False, block_size=12288):
+        super().__init__(recompute_layers, model_name, name, k, tile_size, rolling_prefill, block_size)

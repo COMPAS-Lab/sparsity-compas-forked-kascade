@@ -181,3 +181,9 @@ class KascadeStrategy(PostSoftmaxPooledPrefillTopkStrategy): # Does not support 
         except Exception:
             raise ValueError(f"Head mapping file not found for model {model_name} with layers {self.recompute_layers}.")
         return head_mapping
+
+
+# create kascade_recovery_strategy, it is the same as kascade_strategy but just with a different name
+class KascadeRecoveryStrategy(KascadeStrategy):
+    def __init__(self, recompute_layers: List[int], model_name: str, name="kascade_recovery", k=1, tile_size=1, rolling_prefill=False, block_size=12288):
+        super().__init__(recompute_layers, model_name, name, k, tile_size, rolling_prefill, block_size)

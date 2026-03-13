@@ -13,11 +13,11 @@ from .PreSoftmaxPooledPrefillTopkStrategy import PreSoftmaxPooledPrefillTopkStra
 from .PostSoftmaxPooledPrefillTopkStrategy import PostSoftmaxPooledPrefillTopkStrategy
 from .PostSoftmaxAllHeadsPooledPrefillTopkStrategy import PostSoftmaxAllHeadsPooledPrefillTopkStrategy
 
-from .KascadeStrategy import KascadeStrategy
+from .KascadeStrategy import KascadeStrategy, KascadeRecoveryStrategy
 from .PooledKascadeStrategy import PooledKascadeStrategy
 from .DecodeOnlyKascadeStrategy import DecodeOnlyKascadeStrategy
 from .NoRemapKascadeStrategy import NoRemapKascadeStrategy
-from .EfficientKascadeStrategy import EfficientKascadeStrategy
+from .EfficientKascadeStrategy import EfficientKascadeStrategy, EfficientKascadeRecoveryStrategy
 
 from .QuestStrategy import QuestStrategy
 from .OmniKVStrategy import OmniKVStrategy
@@ -37,10 +37,12 @@ __all__ = [
     "PostSoftmaxPooledPrefillTopkStrategy",
     "PostSoftmaxAllHeadsPooledPrefillTopkStrategy",
     "KascadeStrategy",
+    "KascadeRecoveryStrategy",
     "PooledKascadeStrategy",
     "DecodeOnlyKascadeStrategy",
     "NoRemapKascadeStrategy",
     "EfficientKascadeStrategy",
+    "EfficientKascadeRecoveryStrategy",
     "QuestStrategy",
     "OmniKVStrategy",
     "LessIsMoreStrategy",

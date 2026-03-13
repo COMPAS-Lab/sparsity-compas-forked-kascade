@@ -8,6 +8,8 @@ import numpy as np
 import argparse
 from tqdm import tqdm
 import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.cm as cm
 
 def load_training_data(base_path: Path, model_name: str):
     # load training files
@@ -167,6 +169,26 @@ def vector_distance_loss(pred_mean, pred_std, target_mean, target_std):
     dist = torch.sqrt(diff_sq + 1e-9)
     
     return torch.mean(dist)
+
+
+def gaussian_kl_loss(p_mu, p_sigma, gt_mu, gt_sigma, eps=1e-8):
+    """
+    Kullback-Leibler Divergence between two Gaussians.
+    P: Predicted (p_mu, p_sigma)
+    Q: Ground Truth (gt_mu, gt_sigma)
+    """
+    # Term 1: log(sigma_gt / sigma_p)
+    term1 = torch.log(gt_sigma + eps) - torch.log(p_sigma + eps)
+    
+    # Term 2: (sigma_p^2 + (mu_p - mu_gt)^2) / (2 * sigma_gt^2)
+    # This is the 'Normalized L2' you were looking for!
+    term2 = (p_sigma**2 + (p_mu - gt_mu)**2) / (2 * gt_sigma**2 + eps)
+    
+    # KL Formula
+    kl = term1 + term2 - 0.5
+    
+    return torch.mean(kl)
+
     
 def train_recovery_mlp(
     model, 
@@ -215,7 +237,7 @@ def train_recovery_mlp(
             pred_mean, pred_std = model(batch_x)
             
             # Calculate combined loss
-            loss = vector_distance_loss(pred_mean, pred_std, batch_y[:, 0:1], batch_y[:, 1:2])
+            loss = gaussian_kl_loss(pred_mean, pred_std, batch_y[:, 0:1], batch_y[:, 1:2])
             
             # Backward pass
             optimizer.zero_grad()
@@ -238,7 +260,7 @@ def train_recovery_mlp(
                 batch_x, batch_y = batch_x.to(device), batch_y.to(device)
                 
                 p_mean, p_std = model(batch_x)
-                v_loss = vector_distance_loss(p_mean, p_std, batch_y[:, 0:1], batch_y[:, 1:2])
+                v_loss = gaussian_kl_loss(p_mean, p_std, batch_y[:, 0:1], batch_y[:, 1:2])
                 val_loss += v_loss.item()
                 
                 # Store for R^2 calculation (flattening for simplicity)
@@ -340,6 +362,81 @@ def test_recovery_mlp(
     res_df.to_csv(result_path, index=False)
     
 
+def plot_training_history(loss_csv_paths: list):
+    """
+    Plot training history from multiple per-layer CSV log files onto a single figure.
+
+    Each CSV is expected to contain columns:
+        train_l2_dist, avg_mu_err, avg_std_err
+
+    Plotting style:
+        - train_l2_dist : solid line  (—)
+        - avg_mu_err    : dashed line (--)
+        - avg_std_err   : dotted line (..)
+
+    Layers are differentiated by color.
+
+    Args:
+        loss_csv_paths: List of Path objects pointing to per-layer *_train_log.csv files.
+    """
+    loss_csv_paths = [Path(p) for p in loss_csv_paths]
+    n = len(loss_csv_paths)
+    colors = cm.tab20.colors if n <= 20 else cm.hsv([i / n for i in range(n)])
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+    ax2 = ax.twinx()  # second y-axis for train_l2_dist
+
+    for idx, csv_path in enumerate(loss_csv_paths):
+        df = pd.read_csv(csv_path)
+        color = colors[idx % len(colors)]
+
+        # Derive a readable layer label from the filename
+        # Expected pattern: <model>_recovery_mlp_<dim>_<layer_name>_train_log.csv
+        stem = csv_path.stem  # e.g. "llama_recovery_mlp_256_layer_12_train_log"
+        # Strip the trailing "_train_log" suffix if present
+        label = stem.replace("_train_log", "")
+        # Keep only the layer portion (last two tokens: "layer_<n>")
+        parts = label.rsplit("_", 2)
+        layer_label = "_".join(parts[-2:]) if len(parts) >= 3 else label
+
+        epochs = range(1, len(df) + 1)
+
+        # train_l2_dist on the right y-axis
+        ax2.plot(epochs, df["train_l2_dist"], color=color, linestyle="-",
+                 label=f"{layer_label} train_l2")
+        # error metrics on the left y-axis
+        ax.plot(epochs, df["avg_mu_err"], color=color, linestyle="--",
+                label=f"{layer_label} mu_err")
+        ax.plot(epochs, df["avg_std_err"], color=color, linestyle=":",
+                label=f"{layer_label} std_err")
+
+    ax.set_xlabel("Epoch")
+    ax.set_ylabel("avg_mu_err / avg_std_err")
+    ax.set_xlim(xmin=0.01)
+    ax.set_ylim(ymin=0.01)
+    ax2.set_ylabel("train_l2_dist (KL loss)")
+    ax2.set_ylim(ymin=0.01)
+    ax.set_title("Training History per Layer")
+
+    # Merge legends from both axes into one box
+    lines1, labels1 = ax.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax.legend(lines1 + lines2, labels1 + labels2,
+              loc="upper right", fontsize=7, ncol=max(1, n // 10 + 1))
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+
+    # Save next to the first CSV, or show interactively
+    if loss_csv_paths:
+        out_path = loss_csv_paths[0].parent / "training_history.png"
+        fig.savefig(out_path, dpi=150)
+        print(f"Training history plot saved to {out_path}")
+    else:
+        plt.show()
+
+    plt.close(fig)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Train Recovery MLP")
     parser.add_argument("--model_name", type=str, required=True, help="Model name")
@@ -349,8 +446,8 @@ def main():
 
     data_base_path = Path(args.data_base_path)
     model_path = Path(args.model_path)
-    mlp_dim=128
-    batch_size=1024
+    mlp_dim=256
+    batch_size=512
     
     print(f"loading model files...")
     loaded_raw_data = \
@@ -362,26 +459,39 @@ def main():
     attn_ins, attn_outs = loaded_raw_data["train"]
     attn_ins_test, attn_outs_test = loaded_raw_data["test"]
 
+    training_histories = []
+
     # train each mlp for each layer, save them separately
     for l in n_layers:
-        print(f"training {l}...")
-        train_loader, validate_loader = \
-            prepare_recovery_dataloaders(attn_ins[l], attn_outs[l], batch_size=batch_size)
-        _, test_loader = \
-            prepare_recovery_dataloaders(attn_ins_test[l], attn_outs_test[l], train_ratio=0.0, batch_size=batch_size)
-
-        # start training
-        model = RecoveryMLP(hidden_size=hidden_dim, mlp_dim=mlp_dim).cuda()
-
+        # skip current layer if model exists
         model_path.mkdir(parents=True, exist_ok=True)
         save_path = model_path / f"{args.model_name}_recovery_mlp_{mlp_dim}_{l}.pt"
-        trained_model = \
-            train_recovery_mlp(model, train_loader, validate_loader, model_save_path=save_path, patience=10)
-        print(f"Model saved to {save_path}")
-
-        # start testing
         test_res_path = model_path / f"{args.model_name}_recovery_mlp_{mlp_dim}_{l}_test_log.csv"
-        test_recovery_mlp(trained_model, test_loader, result_path=test_res_path)
+        train_res_path = model_path / f"{args.model_name}_recovery_mlp_{mlp_dim}_{l}_train_log.csv"
+        training_histories.append(train_res_path)
+        if not save_path.exists():
+            print(f"training {l}...")
+            train_loader, validate_loader = \
+                prepare_recovery_dataloaders(attn_ins[l], attn_outs[l], batch_size=batch_size)
+            _, test_loader = \
+                prepare_recovery_dataloaders(attn_ins_test[l], attn_outs_test[l], train_ratio=0.0, batch_size=batch_size)
+
+            # start training
+            model = RecoveryMLP(hidden_size=hidden_dim, mlp_dim=mlp_dim).cuda()
+
+            trained_model = \
+                train_recovery_mlp(model, train_loader, validate_loader, model_save_path=save_path, epochs=400, lr=1e-3, patience=20)
+            print(f"Model saved to {save_path}")
+
+            # start testing
+            test_recovery_mlp(trained_model, test_loader, result_path=test_res_path)
+        else:
+            print(f"Model for layer {l} already exists, skipping...")
+
+    # plot training history into same figure, each layer in different color
+    existing_logs = [p for p in training_histories[:3] if p.exists()]
+    if existing_logs:
+        plot_training_history(existing_logs)
 
 if __name__ == "__main__":
     main()

@@ -98,7 +98,8 @@ MODELS = [
     {
         "name": "Qwen/Qwen3-8B",
         "strategies": [
-            {"name": "kascade", "args": [
+            # {"name": "baseline", "args": []},
+            {"name": "efficient_kascade", "args": [
                 "--tile_size", "32",
                 "--rolling_prefill",
                 "--recompute_layers", "0", "2", "7", "14", "23"
@@ -108,7 +109,8 @@ MODELS = [
     {
         "name": "meta-llama/Meta-Llama-3.1-8B-Instruct",
         "strategies": [
-            {"name": "kascade", "args": [
+            # {"name": "baseline", "args": []},
+            {"name": "efficient_kascade", "args": [
                 "--tile_size", "32",
                 "--rolling_prefill",
                 "--recompute_layers", "0", "2", "8", "13", "14"
@@ -154,6 +156,7 @@ def run_evaluation(model_config):
         all_args.extend(strategy["args"])
     
     base_cmd.extend(all_args)
+    base_cmd.extend(["--debug"])
     
     print(f"Running evaluation for model: {model_name}")
     print(f"Command: {' '.join(base_cmd)}")
