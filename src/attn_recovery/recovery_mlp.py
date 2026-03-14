@@ -13,10 +13,8 @@ class RecoveryMLP(nn.Module):
             ('input_proj', nn.Linear(hidden_size, mlp_dim)),
             ('act1', nn.GELU()),
             ('dropout1', nn.Dropout(0.1)),
-            ('hidden_layer', nn.Linear(mlp_dim, mlp_dim // 2)),
-            ('act2', nn.GELU()),
             # The final layer outputs 2 values: [mean, std_pre_softplus]
-            ('output_layer', nn.Linear(mlp_dim // 2, 2))
+            ('output_layer', nn.Linear(mlp_dim, 2))
         ]))
 
     def forward(self, x):

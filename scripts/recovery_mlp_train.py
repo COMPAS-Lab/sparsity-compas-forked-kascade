@@ -446,7 +446,7 @@ def main():
 
     data_base_path = Path(args.data_base_path)
     model_path = Path(args.model_path)
-    mlp_dim=256
+    mlp_dim=64
     batch_size=512
     
     print(f"loading model files...")
@@ -480,7 +480,7 @@ def main():
             model = RecoveryMLP(hidden_size=hidden_dim, mlp_dim=mlp_dim).cuda()
 
             trained_model = \
-                train_recovery_mlp(model, train_loader, validate_loader, model_save_path=save_path, epochs=400, lr=1e-3, patience=20)
+                train_recovery_mlp(model, train_loader, validate_loader, model_save_path=save_path, epochs=100, lr=1e-3, patience=5)
             print(f"Model saved to {save_path}")
 
             # start testing
@@ -489,7 +489,7 @@ def main():
             print(f"Model for layer {l} already exists, skipping...")
 
     # plot training history into same figure, each layer in different color
-    existing_logs = [p for p in training_histories[:3] if p.exists()]
+    existing_logs = [p for p in training_histories if p.exists()]
     if existing_logs:
         plot_training_history(existing_logs)
 
