@@ -197,7 +197,7 @@ def train_recovery_mlp(
     epochs=100, 
     lr=1e-3, 
     patience=5,
-    min_delta=1e-5,
+    min_delta=1e-4,
     device="cuda",
     model_save_path=Path(""),
 ):
@@ -437,6 +437,45 @@ def plot_training_history(loss_csv_paths: list):
     plt.close(fig)
 
 
+def plot_histogram(data_dict: dict, title: str = "Histogram", save_path: Path = None):
+    """
+    Plot histograms of one or more [N, 1] data series on a single figure.
+
+    Args:
+        data_dict: A dict mapping series name (str) to data.
+                   Each value can be a torch.Tensor or np.ndarray of shape [N, 1] or [N].
+        title:     Figure title.
+        save_path: If given, save the figure to this path; otherwise display it.
+    """
+    colors = list(cm.tab10.colors)
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+
+    for idx, (name, data) in enumerate(data_dict.items()):
+        # Flatten to 1-D numpy array regardless of input type
+        if isinstance(data, torch.Tensor):
+            data = data.detach().cpu().numpy()
+        data = np.asarray(data[:, 0]).flatten()
+
+        ax.hist(data, bins=100, alpha=0.6,
+                color=colors[idx % len(colors)], label=name)
+
+    ax.set_title(title)
+    ax.set_xlabel("Value")
+    ax.set_ylabel("Count")
+    ax.legend(fontsize=9)
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+
+    if save_path is not None:
+        fig.savefig(save_path, dpi=150)
+        print(f"Histogram saved to {save_path}")
+    else:
+        plt.show()
+
+    plt.close(fig)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Train Recovery MLP")
     parser.add_argument("--model_name", type=str, required=True, help="Model name")
@@ -446,7 +485,7 @@ def main():
 
     data_base_path = Path(args.data_base_path)
     model_path = Path(args.model_path)
-    mlp_dim=64
+    mlp_dim=128
     batch_size=512
     
     print(f"loading model files...")
@@ -458,6 +497,13 @@ def main():
     hidden_dim = loaded_raw_data["hidden_dim"]
     attn_ins, attn_outs = loaded_raw_data["train"]
     attn_ins_test, attn_outs_test = loaded_raw_data["test"]
+
+    for l in n_layers:
+        plot_histogram(
+            {"train": attn_outs[l], "test": attn_outs_test[l]}, 
+            "Histogram", 
+            save_path=Path(f"./results/attn_recovery/mean_hist/{args.model_name}_histogram_{l}.png")
+        )
 
     training_histories = []
 
