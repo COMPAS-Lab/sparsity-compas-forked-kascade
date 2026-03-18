@@ -8,12 +8,14 @@ import numpy as np
 import argparse
 from tqdm import tqdm
 import pandas as pd
+from scipy.stats import pearsonr
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 
 def load_training_data(base_path: Path, model_name: str):
     # load training files
-    input_path = base_path / f"{model_name}_input.npy"
+    # input_path = base_path / f"{model_name}_input.npy"
+    input_path = base_path / f"{model_name}_vmatrix.npy"
     output_mean_path = base_path / f"{model_name}_output_mean.npy"
     output_std_path = base_path / f"{model_name}_output_std.npy"
     input_hstates = np.load(input_path, allow_pickle=True).item()
@@ -237,7 +239,9 @@ def train_recovery_mlp(
             pred_mean, pred_std = model(batch_x)
             
             # Calculate combined loss
-            loss = gaussian_kl_loss(pred_mean, pred_std, batch_y[:, 0:1], batch_y[:, 1:2])
+            # loss = gaussian_kl_loss(pred_mean, pred_std, batch_y[:, 0:1], batch_y[:, 1:2])
+            # loss = nn.functional.mse_loss(pred_mean, batch_y[:, 0:1]) + nn.functional.mse_loss(pred_std, batch_y[:, 1:2])
+            loss = nn.functional.huber_loss(pred_mean, batch_y[:, 0:1]) + nn.functional.huber_loss(pred_std, batch_y[:, 1:2])
             
             # Backward pass
             optimizer.zero_grad()
@@ -260,7 +264,9 @@ def train_recovery_mlp(
                 batch_x, batch_y = batch_x.to(device), batch_y.to(device)
                 
                 p_mean, p_std = model(batch_x)
-                v_loss = gaussian_kl_loss(p_mean, p_std, batch_y[:, 0:1], batch_y[:, 1:2])
+                # v_loss = gaussian_kl_loss(p_mean, p_std, batch_y[:, 0:1], batch_y[:, 1:2])
+                # v_loss = nn.functional.mse_loss(p_mean, batch_y[:, 0:1]) + nn.functional.mse_loss(p_std, batch_y[:, 1:2])
+                v_loss = nn.functional.huber_loss(p_mean, batch_y[:, 0:1]) + nn.functional.huber_loss(p_std, batch_y[:, 1:2])
                 val_loss += v_loss.item()
                 
                 # Store for R^2 calculation (flattening for simplicity)
@@ -476,6 +482,18 @@ def plot_histogram(data_dict: dict, title: str = "Histogram", save_path: Path = 
     plt.close(fig)
 
 
+def get_corr(x, y):
+    """
+    Calculate the Pearson correlation coefficient between two tensors.
+    """
+    x = x.cpu().numpy()
+    y = y[:, 0].cpu().numpy()
+    # for each row in x, calculate l2 norm
+    x_norm = np.linalg.norm(x, axis=1)
+    # calculate correlation by sckit learn pearsonr function
+    return pearsonr(x_norm, y)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Train Recovery MLP")
     parser.add_argument("--model_name", type=str, required=True, help="Model name")
@@ -498,12 +516,17 @@ def main():
     attn_ins, attn_outs = loaded_raw_data["train"]
     attn_ins_test, attn_outs_test = loaded_raw_data["test"]
 
+    # for l in n_layers:
+    #     plot_histogram(
+    #         {"train": attn_outs[l], "test": attn_outs_test[l]}, 
+    #         "Histogram", 
+    #         save_path=Path(f"./results/attn_recovery/mean_hist/{args.model_name}_histogram_{l}.png")
+    #     )
+
+    # examine correlation between attn_ins and attn_outs 
     for l in n_layers:
-        plot_histogram(
-            {"train": attn_outs[l], "test": attn_outs_test[l]}, 
-            "Histogram", 
-            save_path=Path(f"./results/attn_recovery/mean_hist/{args.model_name}_histogram_{l}.png")
-        )
+        corr, p_val = get_corr(attn_ins[l], attn_outs[l])
+        print(f"correlation between attn_ins and attn_outs for layer {l}: {corr}, p_val: {p_val}")
 
     training_histories = []
 
@@ -535,9 +558,9 @@ def main():
             print(f"Model for layer {l} already exists, skipping...")
 
     # plot training history into same figure, each layer in different color
-    existing_logs = [p for p in training_histories if p.exists()]
-    if existing_logs:
-        plot_training_history(existing_logs)
+    # existing_logs = [p for p in training_histories if p.exists()]
+    # if existing_logs:
+    #     plot_training_history(existing_logs)
 
 if __name__ == "__main__":
     main()

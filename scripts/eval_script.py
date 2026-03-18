@@ -143,12 +143,14 @@ def main():
         
         offline_attn_out_mean = {}
         offline_attn_out_std = {}
-        forward_attn_in = {}
+        offline_vmatrix = {}
+        offline_attn_in = {}
         forward_hook_handlers = []
         if strategy_name == "baseline_profile": 
             forward_hook_handlers = get_attn_out_stat_profile(
                                         model, 
                                         extracted_attn_in = offline_attn_in, 
+                                        extracted_vmatrix = offline_vmatrix,
                                         extracted_attn_out_mean = offline_attn_out_mean, 
                                         extracted_attn_out_std = offline_attn_out_std)
         else:
@@ -245,6 +247,7 @@ def main():
                     offline_profile_fp.mkdir(parents=True)
                 formatted_model_name = args.model_name.split("/")[-1]
                 np.save(offline_profile_fp/f"{formatted_model_name}_input.npy", offline_attn_in, allow_pickle=True)
+                np.save(offline_profile_fp/f"{formatted_model_name}_vmatrix.npy", offline_vmatrix, allow_pickle=True)
                 np.save(offline_profile_fp/f"{formatted_model_name}_output_mean.npy", offline_attn_out_mean, allow_pickle=True)
                 np.save(offline_profile_fp/f"{formatted_model_name}_output_std.npy", offline_attn_out_std, allow_pickle=True)
 

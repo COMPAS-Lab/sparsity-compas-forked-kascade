@@ -47,8 +47,40 @@ def get_tokenizer_and_model(model_name, attn_implementation, device):
 
 
 def get_attn_out_stat_profile(model, 
-                                extracted_attn_in = {}, attn_in_sample_size = 1000,
-                                extracted_attn_out_mean = {}, extracted_attn_out_std = {}):
+                                extracted_attn_in = {}, 
+                                extracted_vmatrix = {},
+                                attn_in_sample_size = 1000,
+                                extracted_attn_out_mean = {}, 
+                                extracted_attn_out_std = {}):
+    
+    # Single shared index list for the entire forward pass.
+    # Cleared by a model pre-hook at the start of each forward pass so that
+    # fresh indices are computed once (by the first v_proj that fires) and
+    # reused identically across all layers within that pass.
+    sel_idces = []
+
+    def get_vmatrix_hook(layer_name):
+        def hook(module, input, output):
+            # output of v_proj: (batch, seqlen, num_heads * head_dim)
+            v = output
+            if isinstance(v, tuple):
+                v = v[0]
+
+            v_flat = v.reshape(-1, v.shape[-1])
+            print("v_flat shape: ", v_flat.shape)
+
+            # Compute indices once per forward pass (list is cleared by pre-hook)
+            if len(sel_idces) == 0:
+                n = v_flat.shape[0]
+                if n > attn_in_sample_size:
+                    sel_idces[:] = sample(range(n), attn_in_sample_size)
+                else:
+                    sel_idces[:] = range(n)
+
+            v_sampled = v_flat[sel_idces].detach().cpu().numpy().astype(float)
+            extracted_vmatrix[layer_name] = extracted_vmatrix.get(layer_name, []) + [v_sampled]
+        return hook
+
     def get_activation_hook(layer_name):
         def hook(module, input, kwargs, output):
             curr_out = None
@@ -60,32 +92,28 @@ def get_attn_out_stat_profile(model,
             curr_in = kwargs.get("hidden_states", None)
             if curr_in is None and len(input) > 0:
                 curr_in = input[0]
-            
+
             curr_in = curr_in.reshape(-1, curr_in.shape[-1])
             curr_out = curr_out.reshape(-1, curr_out.shape[-1])
 
             print("curr_in shape: ", curr_in.shape)
             print("curr_out shape: ", curr_out.shape)
 
-            # expected input dim: (batch * seqlen, hidden_size)
-            # expected output dim: (batch * seqlen, 1)
-            
-            # generate a set of random indices within range of len(curr_in), to be 
-            # used to sample both curr_in and curr_out
-            if curr_in.shape[0] > attn_in_sample_size:
-                sel_idces = sample(range(curr_in.shape[0]), attn_in_sample_size)
-            else:
-                sel_idces = range(curr_in.shape[0])
+            # Reuse indices computed by v_proj hook for this same forward pass
+            idces = sel_idces
+            if len(idces) == 0:
+                # Fallback: v_proj hook hasn't run (shouldn't happen); sample here
+                n = curr_in.shape[0]
+                idces = sample(range(n), attn_in_sample_size) if n > attn_in_sample_size else list(range(n))
 
-            curr_in = curr_in[sel_idces].detach().cpu().numpy().astype(float)
-            extracted_attn_in[layer_name] = extracted_attn_in.get(layer_name, []) + [curr_in]
-            
-            curr_out = curr_out[sel_idces]
-            curr_out_mean, curr_out_std = \
-                curr_out.mean(dim=-1, keepdims=True).detach().cpu().numpy().astype(float), \
-                curr_out.std(dim=-1, keepdims=True).detach().cpu().numpy().astype(float)
+            curr_in_s = curr_in[idces].detach().cpu().numpy().astype(float)
+            extracted_attn_in[layer_name] = extracted_attn_in.get(layer_name, []) + [curr_in_s]
+
+            curr_out_s = curr_out[idces]
+            curr_out_mean = curr_out_s.mean(dim=-1, keepdims=True).detach().cpu().numpy().astype(float)
+            curr_out_std  = curr_out_s.std(dim=-1, keepdims=True).detach().cpu().numpy().astype(float)
             extracted_attn_out_mean[layer_name] = extracted_attn_out_mean.get(layer_name, []) + [curr_out_mean]
-            extracted_attn_out_std[layer_name] = extracted_attn_out_std.get(layer_name, []) + [curr_out_std]
+            extracted_attn_out_std[layer_name]  = extracted_attn_out_std.get(layer_name, []) + [curr_out_std]
 
         return hook
 
@@ -94,7 +122,18 @@ def get_attn_out_stat_profile(model,
 
     if "llama" in model_name or "qwen3" in model_name:
         n_layers = model.config.num_hidden_layers
+
+        # Clear shared sel_idces at the start of every forward pass so indices
+        # are resampled once per sequence and reused across all layers.
+        handles.append(model.model.register_forward_pre_hook(
+            lambda module, args: sel_idces.clear()
+        ))
+
         for l in range(n_layers):
+            # v_proj hook fires first (sub-module), sets sel_idces if still empty
+            handles.append(model.model.layers[l].self_attn.v_proj.register_forward_hook(
+                get_vmatrix_hook(f"layer_{l}")
+            ))
             handles.append(model.model.layers[l].self_attn.register_forward_hook(
                 get_activation_hook(f"layer_{l}"), with_kwargs=True
             ))

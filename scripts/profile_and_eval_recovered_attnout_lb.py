@@ -110,6 +110,7 @@ def run_profile(model_config, num_queries=1):
     base_cmd.extend(["--num_queries", str(num_queries)])
     base_cmd.extend(["--topk", str(TOPK)])
     base_cmd.extend(["--store_results"])
+    base_cmd.extend(["--debug"])
     
     print(f"Running evaluation for model: {model_name}")
     print(f"Command: {' '.join(base_cmd)}")
@@ -185,12 +186,12 @@ def run_mlp_recovery_eval(model_config):
 def main():
     """Main profile loop"""
     # Run profile for all models
-    # for model_config in MODELS:
-    #     run_profile(model_config, num_queries=5)
+    for model_config in MODELS:
+        run_profile(model_config, num_queries=5)
 
     # Run mlp recovery for all models
-    for model_config in MODELS:
-        run_mlp_recovery_eval(model_config)
+    # for model_config in MODELS:
+    #     run_mlp_recovery_eval(model_config)
 
 
 if __name__ == "__main__":
