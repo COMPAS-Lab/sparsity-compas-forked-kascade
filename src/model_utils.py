@@ -72,8 +72,9 @@ def get_attn_out_stat_profile(model,
             # Compute indices once per forward pass (list is cleared by pre-hook)
             if len(sel_idces) == 0:
                 n = v_flat.shape[0]
-                if n > attn_in_sample_size:
-                    sel_idces[:] = sample(range(n), attn_in_sample_size)
+                if attn_in_sample_size > 0 and n > attn_in_sample_size:
+                    # sel_idces[:] = sample(range(n), attn_in_sample_size)
+                    sel_idces[:] = range(attn_in_sample_size)
                 else:
                     sel_idces[:] = range(n)
 
@@ -187,16 +188,12 @@ def apply_mlp_recovery(model, mlp_model_path: Path, mlp_dim=256):
             x_flat = curr_in.view(-1, curr_in.shape[-1]).to(torch.float32)
 
             with torch.no_grad():
-                pred_mu, pred_std = mlp_recovery_model(x_flat)
-                pred_mu = pred_mu.view(*original_shape[:2], 1).to(attn_output.dtype)
+                pred_std = mlp_recovery_model(x_flat)
                 pred_std = pred_std.view(*original_shape[:2], 1).to(attn_output.dtype)
                 eps = 1e-8
                 curr_mu = attn_output.mean(dim=-1, keepdim=True)
                 curr_std = attn_output.std(dim=-1, keepdim=True)
-                # replace mu with curr mu when its < 1e-4
-                pred_mu_mask = abs(curr_mu) < 1e-4
-                pred_mu[pred_mu_mask] = curr_mu[pred_mu_mask]
-                attn_output.sub_(curr_mu).div_(curr_std + eps).mul_(pred_std).add_(pred_mu)
+                attn_output.sub_(curr_mu).div_(curr_std + eps).mul_(pred_std).add_(curr_mu)
             return (attn_output,) + output[1:]
         return recovery_hook
     

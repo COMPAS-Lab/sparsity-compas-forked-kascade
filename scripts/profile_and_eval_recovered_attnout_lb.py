@@ -42,6 +42,11 @@ MODELS = [
                 "--rolling_prefill",
                 "--recompute_layers", "0", "2", "7", "14", "23"
             ]},
+            {"name": "efficient_kascade", "args": [
+                "--tile_size", "32",
+                "--rolling_prefill",
+                "--recompute_layers", "0", "2", "7", "14", "23"
+            ]},
             {"name": "kascade_recovery", "args": [
                 "--tile_size", "32",
                 "--rolling_prefill",
@@ -65,6 +70,11 @@ MODELS = [
                 "--rolling_prefill",
                 "--recompute_layers", "0", "2", "8", "13", "14"
             ]},
+            {"name": "efficient_kascade", "args": [
+                "--tile_size", "32",
+                "--rolling_prefill",
+                "--recompute_layers", "0", "2", "8", "13", "14"
+            ]},
             {"name": "kascade_recovery", "args": [
                 "--tile_size", "32",
                 "--rolling_prefill",
@@ -82,7 +92,7 @@ MODELS = [
 ]
 
 
-def run_profile(model_config, num_queries=1):
+def run_profile(model_config, strategy_name, num_queries=1):
     """Run attn out profile for a model across all LongBench subsets,
         using 5 samples
     """
@@ -99,19 +109,27 @@ def run_profile(model_config, num_queries=1):
     base_cmd.extend(["--dataset_name", "THUDM/LongBench"])
     
     # Add all subsets
-    longbench_datasets_profile = sample(longbench_datasets, 3)
+    longbench_datasets_profile = longbench_datasets[11:12]
     base_cmd.extend(["--subsets"] + longbench_datasets_profile)
     
     # hardcode strategy name as baseline_profile
-    strategy_names = ["baseline_profile"]
+    strategy_names = [strategy_name]
     base_cmd.extend(["--strategies"] + strategy_names)
     
     # Calculate num_queries (use max for simplicity)
     base_cmd.extend(["--num_queries", str(num_queries)])
     base_cmd.extend(["--topk", str(TOPK)])
     base_cmd.extend(["--store_results"])
-    base_cmd.extend(["--debug"])
+    base_cmd.extend(["--no_shuffle"])
+
+    for strategy in strategies:
+        if strategy["name"] == strategy_name:
+            strategy_args = strategy["args"]
+            base_cmd.extend(strategy_args)
+            break
     
+    base_cmd.extend(["--debug"])
+
     print(f"Running evaluation for model: {model_name}")
     print(f"Command: {' '.join(base_cmd)}")
     
@@ -187,7 +205,7 @@ def main():
     """Main profile loop"""
     # Run profile for all models
     for model_config in MODELS:
-        run_profile(model_config, num_queries=5)
+        run_profile(model_config, strategy_name="efficient_kascade", num_queries=1)
 
     # Run mlp recovery for all models
     # for model_config in MODELS:

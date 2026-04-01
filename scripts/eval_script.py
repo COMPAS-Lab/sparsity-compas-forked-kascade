@@ -83,6 +83,7 @@ def main():
     parser.add_argument("--store_results", action="store_true", help="Store results")
     parser.add_argument("--use_precomputed_stats", action="store_true", help="Use precomputed statistics")
     parser.add_argument("--mlp_recovery_model_path", type=str, default=None, help="Path to the RecoveryMLP weights model")
+    parser.add_argument("--no_shuffle", action="store_true", help="Fix the input dataset sequence (skip shuffle, use original dataset order)")
     args = parser.parse_args()
 
     accelerator = Accelerator(mixed_precision="no", kwargs_handlers=[InitProcessGroupKwargs(timeout=timedelta(seconds=7200))])
@@ -146,13 +147,14 @@ def main():
         offline_vmatrix = {}
         offline_attn_in = {}
         forward_hook_handlers = []
-        if strategy_name == "baseline_profile": 
+        if strategy_name == "baseline_profile" or strategy_name == "efficient_kascade": 
             forward_hook_handlers = get_attn_out_stat_profile(
                                         model, 
                                         extracted_attn_in = offline_attn_in, 
                                         extracted_vmatrix = offline_vmatrix,
                                         extracted_attn_out_mean = offline_attn_out_mean, 
-                                        extracted_attn_out_std = offline_attn_out_std)
+                                        extracted_attn_out_std = offline_attn_out_std, 
+                                        attn_in_sample_size=0)
         else:
             if "_recovery" in strategy_name:
                 mlp_model_path = Path(args.mlp_recovery_model_path)
@@ -169,7 +171,8 @@ def main():
             
             dataset = load_dataset(args.dataset_name, subset, split=default_split, trust_remote_code=True, cache_dir="/dev/shm")
             
-            dataset = dataset.shuffle(seed=args.seed)
+            if not args.no_shuffle:
+                dataset = dataset.shuffle(seed=args.seed)
             num_queries = min(args.num_queries, len(dataset))
             dataset = dataset.select(range(num_queries))
 
@@ -237,12 +240,12 @@ def main():
             
             runner.run()
 
-        if strategy_name == "baseline_profile":
+        if strategy_name == "baseline_profile" or strategy_name == "efficient_kascade":
             for handler in forward_hook_handlers:
                 handler.remove()
                 
             if args.store_results:
-                offline_profile_fp = Path(f"./results/attn_recovery/train")
+                offline_profile_fp = Path(f"./results/attn_recovery/pruned")
                 if not offline_profile_fp.exists():
                     offline_profile_fp.mkdir(parents=True)
                 formatted_model_name = args.model_name.split("/")[-1]

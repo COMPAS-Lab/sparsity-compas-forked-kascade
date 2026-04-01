@@ -14,6 +14,7 @@ import matplotlib.cm as cm
 
 def load_training_data(base_path: Path, model_name: str):
     # load training files
+    # TODO: manually selecting input data as input or vmatrix
     # input_path = base_path / f"{model_name}_input.npy"
     input_path = base_path / f"{model_name}_vmatrix.npy"
     output_mean_path = base_path / f"{model_name}_output_mean.npy"
@@ -149,18 +150,16 @@ def r2_score(y_true, y_pred):
     ss_tot = torch.sum((y_true - torch.mean(y_true)) ** 2)
     return 1 - (ss_res / ss_tot)
 
-def avg_norm_dist(pred_mu, pred_std, target_mu, target_std):
+def avg_norm_dist(pred_std, target_std):
     # Inputs are tensors of shape [N, 1]
     
     # 1. Compute absolute errors
-    mu_err = abs(target_mu - pred_mu) / (abs(target_mu) + 1e-8)
     std_err = abs(target_std - pred_std) / target_std
     
     # 2. Calculate Mean Distance
-    avg_dist_mu = torch.mean(mu_err)
     avg_dist_std = torch.mean(std_err)
     
-    return avg_dist_mu.item(), avg_dist_std.item()
+    return avg_dist_std.item()
     
 def vector_distance_loss(pred_mean, pred_std, target_mean, target_std):
     # Treat (mean, std) as a 2D coordinate
@@ -220,8 +219,7 @@ def train_recovery_mlp(
     best_val_loss = float('inf')
     epochs_no_improve = False
     history = {
-        'train_l2_dist': [], 'val_l2_dist': [], 
-        'avg_mu_err': [], 'avg_std_err': [], 
+        'train_l2_dist': [], 'val_l2_dist': [], 'avg_std_err': [], 
     }
     
     print(f"Starting training on {device}...")
@@ -236,12 +234,13 @@ def train_recovery_mlp(
             batch_y = batch_y.to(device)
             
             # Forward pass: pred is (mean, std)
-            pred_mean, pred_std = model(batch_x)
+            pred_std = model(batch_x)
             
             # Calculate combined loss
-            # loss = gaussian_kl_loss(pred_mean, pred_std, batch_y[:, 0:1], batch_y[:, 1:2])
-            # loss = nn.functional.mse_loss(pred_mean, batch_y[:, 0:1]) + nn.functional.mse_loss(pred_std, batch_y[:, 1:2])
-            loss = nn.functional.huber_loss(pred_mean, batch_y[:, 0:1]) + nn.functional.huber_loss(pred_std, batch_y[:, 1:2])
+            # loss = gaussian_kl_loss(batch_y[:, 0:1], pred_std, batch_y[:, 0:1], batch_y[:, 1:2])
+            # loss = nn.functional.mse_loss(pred_std, batch_y[:, 1:2])
+            # loss = nn.functional.huber_loss(pred_mean, batch_y[:, 0:1]) + nn.functional.huber_loss(pred_std, batch_y[:, 1:2])
+            loss = r2_score(batch_y[:, 1:2], pred_std)
             
             # Backward pass
             optimizer.zero_grad()
@@ -263,15 +262,14 @@ def train_recovery_mlp(
             for batch_x, batch_y in validate_loader:
                 batch_x, batch_y = batch_x.to(device), batch_y.to(device)
                 
-                p_mean, p_std = model(batch_x)
-                # v_loss = gaussian_kl_loss(p_mean, p_std, batch_y[:, 0:1], batch_y[:, 1:2])
-                # v_loss = nn.functional.mse_loss(p_mean, batch_y[:, 0:1]) + nn.functional.mse_loss(p_std, batch_y[:, 1:2])
-                v_loss = nn.functional.huber_loss(p_mean, batch_y[:, 0:1]) + nn.functional.huber_loss(p_std, batch_y[:, 1:2])
+                p_std = model(batch_x)
+                # v_loss = gaussian_kl_loss(batch_y[:, 0:1], p_std, batch_y[:, 0:1], batch_y[:, 1:2])
+                # v_loss = nn.functional.mse_loss(p_std, batch_y[:, 1:2])
+                # v_loss = nn.functional.huber_loss(p_mean, batch_y[:, 0:1]) + nn.functional.huber_loss(p_std, batch_y[:, 1:2])
+                v_loss = r2_score(batch_y[:, 1:2], p_std)
                 val_loss += v_loss.item()
                 
                 # Store for R^2 calculation (flattening for simplicity)
-                all_preds_mean.append(p_mean)
-                all_targets_mean.append(batch_y[:, 0:1])
                 all_preds_std.append(p_std)
                 all_targets_std.append(batch_y[:, 1:2])
 
@@ -280,24 +278,19 @@ def train_recovery_mlp(
         avg_val = val_loss / len(validate_loader)
         
         # Simple R^2 calculation: 1 - (SS_res / SS_tot)
-        all_preds_mean = torch.cat(all_preds_mean, dim=0)
-        all_targets_mean = torch.cat(all_targets_mean, dim=0)
-
         all_preds_std = torch.cat(all_preds_std, dim=0)
         all_targets_std = torch.cat(all_targets_std, dim=0)
 
-        avg_dist_mu, avg_dist_std = \
-            avg_norm_dist(all_preds_mean, all_preds_std, all_targets_mean, all_targets_std)
+        avg_dist_std = \
+            avg_norm_dist(all_preds_std, all_targets_std)
 
         history['train_l2_dist'].append(avg_train)
         history['val_l2_dist'].append(avg_val)
-        history['avg_mu_err'].append(avg_dist_mu)
         history['avg_std_err'].append(avg_dist_std)
 
         print(f"Epoch {epoch+1}: " + \
                 f"Train Loss: {avg_train:.6f} | " + \
                 f"Val Loss: {avg_val:.6f} | " + \
-                f"avg mu err: {avg_dist_mu:.4f} | " + \
                 f"avg std err: {avg_dist_std:.4f}")
 
         # Check if the improvement is greater than min_delta
@@ -339,30 +332,27 @@ def test_recovery_mlp(
         for batch_x, batch_y in test_loader:
             batch_x, batch_y = batch_x.to(device), batch_y.to(device)
             
-            p_mean, p_std = model(batch_x)
-            v_loss = vector_distance_loss(p_mean, p_std, batch_y[:, 0:1], batch_y[:, 1:2])
+            p_std = model(batch_x)
+            # v_loss = gaussian_kl_loss(batch_y[:, 0:1], p_std, batch_y[:, 0:1], batch_y[:, 1:2])
+            # v_loss = vector_distance_loss(p_mean, p_std, batch_y[:, 0:1], batch_y[:, 1:2])
+            # v_loss = nn.functional.mse_loss(p_std, batch_y[:, 1:2])
+            v_loss = r2_score(batch_y[:, 1:2], p_std)
             val_loss += v_loss.item()
             
-            all_preds_mean.append(p_mean)
-            all_targets_mean.append(batch_y[:, 0:1])
             all_preds_std.append(p_std)
             all_targets_std.append(batch_y[:, 1:2])
 
     avg_val = val_loss / len(test_loader)
     # use avg_dist as final result
-    all_preds_mean = torch.cat(all_preds_mean, dim=0)
-    all_targets_mean = torch.cat(all_targets_mean, dim=0)
-
     all_preds_std = torch.cat(all_preds_std, dim=0)
     all_targets_std = torch.cat(all_targets_std, dim=0)
 
-    avg_dist_mu, avg_dist_std = \
-        avg_norm_dist(all_preds_mean, all_preds_std, all_targets_mean, all_targets_std)
+    avg_dist_std = \
+        avg_norm_dist(all_preds_std, all_targets_std)
 
-    print(f"test results: avg mu dist: {avg_dist_mu:.4f}, avg std dist: {avg_dist_std:.4f}")
+    print(f"test results: avg std dist: {avg_dist_std:.4f}")
     res_df = pd.DataFrame({
         "val_l2_dist": [avg_val],
-        "avg_mu_err": [avg_dist_mu],
         "avg_std_err": [avg_dist_std],    
     })
     res_df.to_csv(result_path, index=False)
@@ -443,7 +433,7 @@ def plot_training_history(loss_csv_paths: list):
     plt.close(fig)
 
 
-def plot_histogram(data_dict: dict, title: str = "Histogram", save_path: Path = None):
+def plot_histogram(data_dict: dict, title: str = "Histogram", data_type: str = "mean", save_path: Path = None):
     """
     Plot histograms of one or more [N, 1] data series on a single figure.
 
@@ -457,11 +447,13 @@ def plot_histogram(data_dict: dict, title: str = "Histogram", save_path: Path = 
 
     fig, ax = plt.subplots(figsize=(10, 5))
 
+    data_idx = 1 if data_type == "std" else 0
+
     for idx, (name, data) in enumerate(data_dict.items()):
         # Flatten to 1-D numpy array regardless of input type
         if isinstance(data, torch.Tensor):
             data = data.detach().cpu().numpy()
-        data = np.asarray(data[:, 0]).flatten()
+        data = np.asarray(data[:, data_idx]).flatten()
 
         ax.hist(data, bins=100, alpha=0.6,
                 color=colors[idx % len(colors)], label=name)
@@ -474,6 +466,7 @@ def plot_histogram(data_dict: dict, title: str = "Histogram", save_path: Path = 
     plt.tight_layout()
 
     if save_path is not None:
+        save_path.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(save_path, dpi=150)
         print(f"Histogram saved to {save_path}")
     else:
@@ -482,15 +475,25 @@ def plot_histogram(data_dict: dict, title: str = "Histogram", save_path: Path = 
     plt.close(fig)
 
 
-def get_corr(x, y):
+def get_corr(x, y, layer_id, model_name):
     """
     Calculate the Pearson correlation coefficient between two tensors.
     """
     x = x.cpu().numpy()
-    y = y[:, 0].cpu().numpy()
+    y = y[:, 1].cpu().numpy()
     # for each row in x, calculate l2 norm
     x_norm = np.linalg.norm(x, axis=1)
-    # calculate correlation by sckit learn pearsonr function
+
+    # plot x_norm and y
+    plt.figure(figsize=(10, 5))
+    plt.scatter(x_norm, y, alpha=0.5)
+    plt.xlabel("x_norm")
+    plt.ylabel("y")
+    plt.title("Correlation between x_norm and y")
+    plt.savefig(f"./results/attn_recovery/vmat_l2_std_plot/{model_name}_{layer_id}_correlation.png")
+    plt.close()
+
+    # calculate and return pearsonr
     return pearsonr(x_norm, y)
 
 
@@ -503,7 +506,7 @@ def main():
 
     data_base_path = Path(args.data_base_path)
     model_path = Path(args.model_path)
-    mlp_dim=128
+    mlp_dim=256
     batch_size=512
     
     print(f"loading model files...")
@@ -516,17 +519,23 @@ def main():
     attn_ins, attn_outs = loaded_raw_data["train"]
     attn_ins_test, attn_outs_test = loaded_raw_data["test"]
 
+    # plot histogram of attn_outs
     # for l in n_layers:
     #     plot_histogram(
     #         {"train": attn_outs[l], "test": attn_outs_test[l]}, 
-    #         "Histogram", 
-    #         save_path=Path(f"./results/attn_recovery/mean_hist/{args.model_name}_histogram_{l}.png")
+    #         "Histogram", data_type="mean",
+    #         save_path=Path(f"./results/attn_recovery/mean_hist/baseline/{args.model_name}_histogram_{l}.png")
+    #     )
+    #     plot_histogram(
+    #         {"train": attn_outs[l], "test": attn_outs_test[l]}, 
+    #         "Histogram", data_type="std",
+    #         save_path=Path(f"./results/attn_recovery/std_hist/baseline/{args.model_name}_histogram_{l}.png")
     #     )
 
     # examine correlation between attn_ins and attn_outs 
-    for l in n_layers:
-        corr, p_val = get_corr(attn_ins[l], attn_outs[l])
-        print(f"correlation between attn_ins and attn_outs for layer {l}: {corr}, p_val: {p_val}")
+    # for l in n_layers[:4]:
+    #     corr, p_val = get_corr(attn_ins[l], attn_outs[l], l, args.model_name)
+    #     print(f"\"{l}\", {corr}, {p_val}, \"vmatrix\", \"mean\", \"{args.model_name}\"")
 
     training_histories = []
 
@@ -549,7 +558,7 @@ def main():
             model = RecoveryMLP(hidden_size=hidden_dim, mlp_dim=mlp_dim).cuda()
 
             trained_model = \
-                train_recovery_mlp(model, train_loader, validate_loader, model_save_path=save_path, epochs=100, lr=1e-3, patience=5)
+                train_recovery_mlp(model, train_loader, validate_loader, model_save_path=save_path, epochs=300, lr=1e-3, patience=20)
             print(f"Model saved to {save_path}")
 
             # start testing
