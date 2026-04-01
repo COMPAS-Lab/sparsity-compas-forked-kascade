@@ -18,6 +18,7 @@ from .PooledKascadeStrategy import PooledKascadeStrategy
 from .DecodeOnlyKascadeStrategy import DecodeOnlyKascadeStrategy
 from .NoRemapKascadeStrategy import NoRemapKascadeStrategy
 from .EfficientKascadeStrategy import EfficientKascadeStrategy, EfficientKascadeRecoveryStrategy
+from .verify_pruning_recovery_strategy import VerifyPruningRecoveryStrategy
 
 from .QuestStrategy import QuestStrategy
 from .OmniKVStrategy import OmniKVStrategy
@@ -43,6 +44,7 @@ __all__ = [
     "NoRemapKascadeStrategy",
     "EfficientKascadeStrategy",
     "EfficientKascadeRecoveryStrategy",
+    "VerifyPruningRecoveryStrategy",
     "QuestStrategy",
     "OmniKVStrategy",
     "LessIsMoreStrategy",

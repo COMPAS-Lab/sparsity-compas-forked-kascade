@@ -59,6 +59,11 @@ MODELS = [
                 "--recompute_layers", "0", "2", "7", "14", "23",
                 "--mlp_recovery_model_path", "./results/attn_recovery/mlp_model_attn_feature_layer_distinguished"
             ]},
+            {"name": "verify_pruning_recovery", "args": [
+                "--tile_size", "32",
+                "--rolling_prefill",
+                "--recompute_layers", "0", "2", "7", "14", "23"
+            ]},
         ]
     },
     {
@@ -86,6 +91,11 @@ MODELS = [
                 "--rolling_prefill",
                 "--recompute_layers", "0", "2", "8", "13", "14",
                 "--mlp_recovery_model_path", "./results/attn_recovery/mlp_model_attn_feature_layer_distinguished"
+            ]},
+            {"name": "verify_pruning_recovery", "args": [
+                "--tile_size", "32",
+                "--rolling_prefill",
+                "--recompute_layers", "0", "2", "8", "13", "14"
             ]},
         ]
     },
@@ -201,11 +211,65 @@ def run_mlp_recovery_eval(model_config):
         check=True
     )
 
+def run_verify_pruning_recovery(model_config):
+    """Run verify_pruning_recovery strategy for a model on a single LongBench subset.
+
+    Uses the same subset and num_queries as run_profile so that a fast
+    single-sample diagnostic run is the default.
+    """
+    model_name = model_config["name"]
+    strategies = model_config["strategies"]
+
+    # Build base command
+    base_cmd = ["accelerate", "launch", "./scripts/eval_script.py"]
+
+    # Add model
+    base_cmd.extend(["--model_name", model_name])
+
+    # Add dataset
+    base_cmd.extend(["--dataset_name", "THUDM/LongBench"])
+
+    # Add a single quick subset for diagnostics
+    base_cmd.extend(["--subsets"] + longbench_datasets)
+
+    # Strategy
+    base_cmd.extend(["--strategies", "verify_pruning_recovery"])
+
+    # Queries
+    max_num_queries = max(dataset_num_queries.get(d, 200) for d in longbench_datasets)
+    base_cmd.extend(["--num_queries", str(max_num_queries)])
+    base_cmd.extend(["--topk", str(TOPK)])
+    base_cmd.extend(["--store_results"])
+    # base_cmd.extend(["--no_shuffle"])
+
+    # Fetch strategy-specific args (tile_size, recompute_layers, rolling_prefill)
+    for strategy in strategies:
+        if strategy["name"] == "verify_pruning_recovery":
+            base_cmd.extend(strategy["args"])
+            break
+
+    base_cmd.extend(["--debug"])
+
+    print(f"Running verify_pruning_recovery for model: {model_name}")
+    print(f"Command: {' '.join(base_cmd)}")
+
+    current_env = os.environ.copy()
+    python_executable = sys.executable
+    conda_bin_dir = os.path.dirname(python_executable)
+    current_env["PATH"] = f"{conda_bin_dir}:{current_env['PATH']}"
+
+    subprocess.run(base_cmd, env=current_env, check=True)
+
+
 def main():
     """Main profile loop"""
     # Run profile for all models
+    # for model_config in MODELS:
+    #     run_profile(model_config, strategy_name="efficient_kascade", num_queries=1)
+
+    # Run oracle recovery verification for all models
     for model_config in MODELS:
-        run_profile(model_config, strategy_name="efficient_kascade", num_queries=1)
+        run_verify_pruning_recovery(model_config)
 
     # Run mlp recovery for all models
     # for model_config in MODELS:

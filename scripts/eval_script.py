@@ -43,6 +43,7 @@ def main():
         "decode_only_kascade",
         "efficient_kascade",
         "efficient_kascade_recovery",
+        "verify_pruning_recovery",
         "no_remap_kascade",
         "quest",
         "omni_kv",
@@ -136,6 +137,7 @@ def main():
             # additional mlp recovery strategy
             "kascade_recovery": lambda: KascadeRecoveryStrategy(recompute_layers=args.recompute_layers, model_name=args.model_name, k=args.topk, tile_size=args.tile_size, rolling_prefill=args.rolling_prefill),
             "efficient_kascade_recovery": lambda: EfficientKascadeRecoveryStrategy(recompute_layers=args.recompute_layers, model_name=args.model_name, k=args.topk, tile_size=args.tile_size, rolling_prefill=args.rolling_prefill),
+            "verify_pruning_recovery": lambda: VerifyPruningRecoveryStrategy(recompute_layers=args.recompute_layers, model_name=args.model_name, k=args.topk, tile_size=args.tile_size, rolling_prefill=args.rolling_prefill),
         }
 
         strategy: Strategy = strategy2class[strategy_name]()
@@ -156,7 +158,7 @@ def main():
                                         extracted_attn_out_std = offline_attn_out_std, 
                                         attn_in_sample_size=0)
         else:
-            if "_recovery" in strategy_name:
+            if "_recovery" in strategy_name and strategy_name != "verify_pruning_recovery":
                 mlp_model_path = Path(args.mlp_recovery_model_path)
                 if not mlp_model_path.exists():
                     raise FileNotFoundError(f"MLP model weights not found at {mlp_model_path}")
