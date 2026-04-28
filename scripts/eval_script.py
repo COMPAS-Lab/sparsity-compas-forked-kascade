@@ -149,7 +149,7 @@ def main():
         offline_vmatrix = {}
         offline_attn_in = {}
         forward_hook_handlers = []
-        if strategy_name == "baseline_profile" or strategy_name == "efficient_kascade": 
+        if strategy_name == "baseline_profile": 
             forward_hook_handlers = get_attn_out_stat_profile(
                                         model, 
                                         extracted_attn_in = offline_attn_in, 
@@ -242,7 +242,7 @@ def main():
             
             runner.run()
 
-        if strategy_name == "baseline_profile" or strategy_name == "efficient_kascade":
+        if strategy_name == "baseline_profile":
             for handler in forward_hook_handlers:
                 handler.remove()
                 

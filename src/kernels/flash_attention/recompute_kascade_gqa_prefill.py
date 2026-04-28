@@ -212,7 +212,7 @@ def flashattn(batch, heads, seq_len, dim, tune=False, groups=1, kernel_type="pre
                 
                 for i, h in T.Parallel(block_M, block_H):
                     is_within_bounds = (bx * block_M + i < seq_len)
-                    log_sum_local[i * block_H + h] = T.if_then_else(is_within_bounds, log_sum[bz, bx * block_M + i, by * block_H + h],T.infinity(accum_dtype))              
+                    log_sum_local[i * block_H + h] = T.if_then_else(is_within_bounds, log_sum[bz, bx * block_M + i, by * block_H + h],T.infinity(accum_dtype))
 
                 loop_range = T.min(T.ceildiv(bx * block_M, block_N), T.ceildiv(seq_len - block_M, block_N))
                 for k in T.Pipelined(

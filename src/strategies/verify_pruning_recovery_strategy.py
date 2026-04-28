@@ -145,6 +145,7 @@ class VerifyPruningRecoveryStrategy(EfficientKascadeStrategy):
             module, query, key, value, attention_mask, scaling,
             dropout=dropout, **kwargs
         )
+        print(f"[Layer {layer_idx:02d}] output dim: {pruned_out.shape}")
 
         # --- Shift pruned output to ground-truth distribution ---
         eps = 1e-8

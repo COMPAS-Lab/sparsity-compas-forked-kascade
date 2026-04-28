@@ -117,6 +117,17 @@ MODELS = [
             ]},
         ]
     },
+    {
+        "name": "meta-llama/Llama-3.2-1B-Instruct",
+        "strategies": [
+            # {"name": "baseline", "args": []},
+            {"name": "kascade", "args": [
+                "--tile_size", "32",
+                "--rolling_prefill",
+                "--recompute_layers", "0", "5", "6", "7", "8"
+            ]},
+        ]
+    },
 ]
 
 def run_evaluation(model_config):

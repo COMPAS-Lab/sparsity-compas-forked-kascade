@@ -10,15 +10,18 @@ from .attention_utils import get_heuristic_config
 import torch
 from torch import nn
 import math
+from transformers import AutoConfig
 from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
 from transformers.masking_utils import ALL_MASK_ATTENTION_FUNCTIONS
 
 class EfficientKascadeStrategy(KascadeStrategy):
     def __init__(self, recompute_layers: List[int], model_name: str, name="efficient_kascade", k=1, tile_size=1, rolling_prefill=False, block_size=12288):
         super().__init__(name=name, recompute_layers=recompute_layers, model_name=model_name, k=k, tile_size=tile_size, rolling_prefill=rolling_prefill, block_size=block_size)
-        self._heads = 32
-        self._dim = 128
-        self._groups = 8
+        # get model config to register num_heads, num_groups, dim
+        model_config = AutoConfig.from_pretrained(model_name)
+        self._heads = model_config.num_attention_heads
+        self._dim = model_config.hidden_size // self._heads
+        self._groups = model_config.num_key_value_heads
         config = get_heuristic_config()
 
         decode_recomp0_program = decode_recompute_kernel(T.symbolic("batch"), self._heads, self._groups, T.symbolic("kv_seqlen"), self._dim, tune=False, layer=0)(**config)

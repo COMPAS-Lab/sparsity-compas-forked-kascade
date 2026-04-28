@@ -8,7 +8,7 @@ import csv
 from collections import defaultdict
 from random import sample
 
-TOPK = 5  # Fixed TopK for LongBench evaluations
+TOPK = 1  # Fixed TopK for LongBench evaluations
 
 # LongBench datasets
 longbench_datasets = [

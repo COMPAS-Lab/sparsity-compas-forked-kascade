@@ -218,6 +218,7 @@ def get_inst_tokens(model_name, use_sys_token = False, enable_thinking = False):
         "llama": ("<|start_header_id|>{}<|end_header_id|>\n\n", "", "<|eot_id|>"),
         "mistral": ("INST] ", "[", " [/"),
         "qwen": ("<|im_start|>{}\n", "", "<|im_end|>\n"),
+        "olmo-2": ("<|{}|>", "", ""),
     }
 
     model_key = next((k for k in inst_token_dict if k in model_name.lower()), None)
@@ -234,6 +235,10 @@ def get_inst_tokens(model_name, use_sys_token = False, enable_thinking = False):
         tokens_to_return[0] = inst_tokens[1]+inst_tokens[0].format("User")
         tokens_to_return[1] = ""
         tokens_to_return[2] = inst_tokens[0].format("Assistant")+inst_tokens[2]
+    elif model_key == "olmo-2":
+        tokens_to_return[0] = inst_tokens[0].format("user")
+        tokens_to_return[1] = ""
+        tokens_to_return[2] = inst_tokens[0].format("assistant")
     else:
         tokens_to_return[0] = inst_tokens[1]+inst_tokens[0].format("user")
         tokens_to_return[1] = ""

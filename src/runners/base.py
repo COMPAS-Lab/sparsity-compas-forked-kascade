@@ -128,7 +128,7 @@ class BaseGenerationRunner:
                                 padding=True,
                                 truncation=True,
                                 max_length=self.config.max_length,
-                                padding_side="left",
+                                padding_side=self.tokenizer.padding_side,
                             )
                             outputs = self.model.generate(
                                 batch["input_ids"].to(self.model.device),
