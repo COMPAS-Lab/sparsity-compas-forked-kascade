@@ -133,6 +133,8 @@ python scripts/stat_analyzer.py \
 
 ## Preliminary results
 
+> Some plots, training logs and eval results are available [here](https://github.com/COMPAS-Lab/sparsity-compas-forked-kascade/releases/tag/tianchu_deliverable)
+
 #### 1. Non-prediction-based attention recovery does not significantly boost the accuracy.
     
 We used 2-pass method to recover the weighted sum of values ($AV$), by shifting the mean and std of $AV$ after pruning, to the mean and std of $AV$ before pruning.
