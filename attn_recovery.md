@@ -7,7 +7,7 @@ Thus its successor components such as attention output ($AV$, and $Linear(AV)$) 
 The sudden change on the distribution causes a mismatch between the expected mean and std of the LayerNorm's input, and potentially leads to accuracy drop.
 The goal of attention distribution recovery is to shift the mean/std of the component so that it matches the LayerNorm's expectation.
 
-## Terms
+## Terminology
 
 **Pruning**: in this project, pruning refers to Kascade pruning method.
 
@@ -157,6 +157,14 @@ Others has no obvious correlation.
 
 This experiment is performed in another [repo](https://github.com/COMPAS-Lab/sparsity-compas-forked-longbench/tree/flexattn).
 On Olmo-2-1B model with element-wise, threshold based pruning with eager attention, the recovery of $A= Softmax(QK^T)$ improves the LongBench score on some specific tasks.
+There are three main differences between this experiment and the experiment for result 1:
+
+1. this experiment is on Olmo-2-1B
+2. this experiment uses threshold based pruning, not kascade
+3. this experiment is recovering $A= Softmax(QK^T)$, not $AV$
+
+Due to that the aforementioned repo was implemented on [an out-dated, self-modified version of the Huggingface transformers library](https://github.com/COMPAS-Lab/sparsity-compas-forked-longbench/tree/flexattn), it is not recommended to try to continue any branch of development based on that repo.
+In the next step, we should try to reproduce this experiment using this repo, which relies on forward-hooking mechanism to modify the attention, rather than directly modifying the transformers code.
 
 ## Future plans
 
