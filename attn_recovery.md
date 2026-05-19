@@ -2,8 +2,8 @@
 
 This file documents the attention distribution recovery methods, implemented on top of Kascade
 
-The core idea of attention distribution recovery is that the distribution of the attention weight (result of $softmax(QK^T)$) changes as the pruning method forcely clamps the tiny attention values to zero.
-Thus its successor components such as attention output ($AV$, and $Linear(AV)$) will also have different distributions compared to before pruning.
+The core idea of attention distribution recovery is that the distribution of the attention weight (result of $softmax(QK^T)$ ) changes as the pruning method forcely clamps the tiny attention values to zero.
+Thus its successor components such as attention output ($AV$, and $Linear(AV)$ ) will also have different distributions compared to before pruning.
 The sudden change on the distribution causes a mismatch between the expected mean and std of the LayerNorm's input, and potentially leads to accuracy drop.
 The goal of attention distribution recovery is to shift the mean/std of the component so that it matches the LayerNorm's expectation.
 
@@ -178,9 +178,9 @@ Eager-attention-based experiment platform should be built based on top of [`Kasc
 The goal of this platform is to provide the ability to store and alter any possible node inside attention, including:
 - the input of the attention layer
 - Q, K, V matrices
-- attention weights ($A=softmax(QK^T)$)
+- attention weights ($A=softmax(QK^T)$ )
 - weighted value sums ($AV$)
-- output of attention layer ($O=Linear(AV)$)
+- output of attention layer ($O=Linear(AV)$ )
 
 So that we can figure out which component is best to be recovered, to minimize the accuracy drop.
 The attention components altered and stored by the eager-attention-based platform can be used to 
@@ -193,6 +193,10 @@ The attention components altered and stored by the eager-attention-based platfor
 
 Eager-attention-based platform should have the restriction of running on a set of limited length sequences to prevent from OOM errors.
 This restriction can be implemented in its strategies class, so that it does not need the interference from evaluation scripts (`scripts/eval_script.py` and `scripts/eval_lb.py`).
+
+> ***Note:*** currently Olmo-2-1b can finish inference on a single H200 GPU, but llama3.1-1b-instruct cannot.
+> It may worth investigate how to use Tensor Parallelism on the existing Kascade framework to split different tensors in the self-attention to enable multi-GPU inference.
+> However it may also make the component storing more complex, as it needs to collect different components from different GPUs.
 
 ### Flash-attention-based platform:
 
